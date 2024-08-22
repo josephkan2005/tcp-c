@@ -1,4 +1,5 @@
 #include "header.h"
+#include "utils.h"
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <linux/if_tun.h>
@@ -71,40 +72,38 @@ int main(int argc, char **argv) {
         }
     } else {
         while (1) {
+            printf("\n");
             int nread = read(tun_fd, buffer, sizeof(buffer));
-            printf("nread: %d\n", nread);
             if (nread < 0) {
                 perror("Reading from interface");
                 close(tun_fd);
                 exit(1);
             }
 
-            for (int i = 0; i < nread; i++) {
-                printf("%02X", buffer[i]);
-            }
-
-            printf("\n");
-
             ip_header iph;
 
-            to_ip_header(&iph, &buffer);
+            to_ip_header(&iph, buffer);
 
-            printf("size: %lu, ipsz: %lu, %lx\n", sizeof(uint32_t),
-                   sizeof(ip_header), iph.src_addr);
+            if (iph.ver != 4)
+                continue;
 
-            printf("v: %02X, ihl: %02X, tos: %02X, len:  %02X, id:  "
-                   "%02X, frag:  %02X, ttl: %02X, proto: %02X, dest: %02X, "
-                   "src: %02X\n",
-                   iph.ver, iph.ihl, iph.tos, iph.len, iph.id, iph.frag,
-                   iph.ttl, iph.proto, iph.dest_addr, iph.src_addr);
+            printf("nread: %d\n", nread);
 
-            char str[INET6_ADDRSTRLEN];
+            print_hex(buffer, nread);
 
-            printf("\n");
+            print_ip_header(&iph);
 
-            uint32_t converted = htonl(iph.src_addr);
+            tcp_header tcph;
 
-            printf("%s", inet_ntop(AF_INET, &converted, str, INET_ADDRSTRLEN));
+            to_tcp_header(&tcph, buffer + (iph.ihl << 2));
+
+            print_tcp_header(&tcph);
+
+            uint8_t testbuf[4096];
+
+            from_tcp_header(&tcph, testbuf);
+
+            print_hex(testbuf, tcph.doff << 2);
 
             printf("\n");
         }

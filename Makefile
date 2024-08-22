@@ -21,7 +21,7 @@ $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c Makefile
 	-mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-run: $(BUILD_DIR)/$(TARGET) $(OBJS) $(DEPS)
+run: $(BUILD_DIR)/$(TARGET)
 	./scripts/run.sh 0
 
 .PHONY: clean

@@ -2,10 +2,11 @@
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 int to_tcp_header(tcp_header *header, uint8_t *buffer) {
-    *header = *(tcp_header *)buffer;
+    memcpy(header, buffer, sizeof(tcp_header));
     header->src_port = ntohs(header->src_port);
     header->dest_port = ntohs(header->dest_port);
     header->seq = ntohl(header->seq);
@@ -39,13 +40,23 @@ int to_ip_header(ip_header *header, uint8_t *buffer) {
     memcpy(header, buffer, sizeof(ip_header));
     header->dest_addr = ntohl(header->dest_addr);
     header->src_addr = ntohl(header->src_addr);
+    header->id = ntohs(header->len);
+    header->len = ntohs(header->len);
+    header->check = ntohs(header->check);
     return 0;
 }
 
 int from_ip_header(ip_header *header, uint8_t *buffer) {
     ip_header temp = *header;
+
     temp.src_addr = htonl(temp.src_addr);
     temp.dest_addr = htonl(temp.dest_addr);
+    temp.id = htons(temp.len);
+    temp.len = htons(temp.len);
+    temp.check = ip_checksum(header);
+    temp.check = htons(temp.check);
+
+    memcpy(buffer, &temp, sizeof(ip_header));
 
     return 0;
 }

@@ -10,17 +10,15 @@
 #define TCP_URG 0x20
 
 typedef struct tcp_header {
-    uint32_t src_port;
+    uint16_t src_port;
     uint16_t dest_port;
 
     uint32_t seq;
     uint32_t seq_ack;
 
-    uint8_t res : 6;
+    uint8_t res : 4;
     uint8_t doff : 4;
-
-    // Flags
-    uint8_t fin : 1, sin : 1, rst : 1, psh : 1, ack : 1, urg : 1;
+    uint8_t flags;
 
     uint16_t wnd;
 
@@ -67,3 +65,7 @@ uint16_t checksum(uint16_t *payload, uint32_t count, uint32_t start);
 int tcp_checksum(tcp_ip_header *iph, tcp_header *tcph, uint8_t *payload);
 
 int ip_checksum(ip_header *iph);
+
+void print_tcp_header(tcp_header *tcph);
+
+void print_ip_header(ip_header *iph);
