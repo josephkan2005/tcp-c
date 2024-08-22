@@ -1,12 +1,16 @@
 #include "header.h"
+#include <arpa/inet.h>
 #include <fcntl.h>
 #include <linux/if_tun.h>
 #include <net/if.h>
+#include <netinet/in.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -36,11 +40,6 @@ int tun_alloc(char *dev, int flags) {
 
     return fd;
 }
-static const char pkt_data[] =
-    "\x3c\xfd\xfe\x9e\x7f\x71\xec\xb1\xd7\x98\x3a\xc0\x08\x00\x45\x00"
-    "\x00\x2e\x00\x00\x00\x00\x40\x11\x88\x97\x05\x08\x07\x08\xc8\x14"
-    "\x1e\x04\x10\x92\x10\x92\x00\x1a\x6d\xa3\x34\x33\x1f\x69\x40\x6b"
-    "\x54\x59\xb6\x14\x2d\x11\x44\xbf\xaf\xd9\xbe\xaa";
 
 int main(int argc, char **argv) {
     int sender = 0;
@@ -48,27 +47,22 @@ int main(int argc, char **argv) {
         sender = atoi(argv[1]);
     }
 
-    int tap_fd;
+    int tun_fd;
     char tun_name[IFNAMSIZ];
-    char buffer[4096];
+    uint8_t buffer[4096];
     int nwrite;
     unsigned long x = 0;
-    strcpy(tun_name, "tap0");
-    tap_fd = tun_alloc(tun_name, IFF_TAP | IFF_MULTI_QUEUE | IFF_NAPI);
-    if (tap_fd < 0) {
+    strcpy(tun_name, "tun0");
+    tun_fd = tun_alloc(tun_name, IFF_TUN | IFF_NO_PI);
+    if (tun_fd < 0) {
         perror("Allocating interface");
         exit(1);
     }
 
-    if (sender) {
-        printf("Sender\n");
-    } else {
-        printf("Receiver\n");
-    }
-
     if (sender > 0) {
         while (1) {
-            nwrite = write(tap_fd, pkt_data, sizeof(pkt_data));
+            char data[2] = {'0', '1'};
+            nwrite = write(tun_fd, data, sizeof(data));
             if (nwrite < 0) {
                 perror("writing data");
             }
@@ -77,16 +71,42 @@ int main(int argc, char **argv) {
         }
     } else {
         while (1) {
-            int nread = read(tap_fd, buffer, sizeof(buffer));
+            int nread = read(tun_fd, buffer, sizeof(buffer));
+            printf("nread: %d\n", nread);
             if (nread < 0) {
                 perror("Reading from interface");
-                close(tap_fd);
+                close(tun_fd);
                 exit(1);
             }
 
-            /* Do whatever with the data */
-            if ((x++ % 1000) == 0)
-                printf("Read %d bytes from device %s\n", nread, tun_name);
+            for (int i = 0; i < nread; i++) {
+                printf("%02X", buffer[i]);
+            }
+
+            printf("\n");
+
+            ip_header iph;
+
+            to_ip_header(&iph, &buffer);
+
+            printf("size: %lu, ipsz: %lu, %lx\n", sizeof(uint32_t),
+                   sizeof(ip_header), iph.src_addr);
+
+            printf("v: %02X, ihl: %02X, tos: %02X, len:  %02X, id:  "
+                   "%02X, frag:  %02X, ttl: %02X, proto: %02X, dest: %02X, "
+                   "src: %02X\n",
+                   iph.ver, iph.ihl, iph.tos, iph.len, iph.id, iph.frag,
+                   iph.ttl, iph.proto, iph.dest_addr, iph.src_addr);
+
+            char str[INET6_ADDRSTRLEN];
+
+            printf("\n");
+
+            uint32_t converted = htonl(iph.src_addr);
+
+            printf("%s", inet_ntop(AF_INET, &converted, str, INET_ADDRSTRLEN));
+
+            printf("\n");
         }
     }
 

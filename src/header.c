@@ -1,5 +1,6 @@
 #include "header.h"
 #include <netinet/in.h>
+#include <netinet/ip.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -33,6 +34,22 @@ int from_tcp_header(tcp_header *header, uint8_t *buffer) {
     return 0;
 }
 
+int to_ip_header(ip_header *header, uint8_t *buffer) {
+    // *header = *(ip_header *)buffer;
+    memcpy(header, buffer, sizeof(ip_header));
+    header->dest_addr = ntohl(header->dest_addr);
+    header->src_addr = ntohl(header->src_addr);
+    return 0;
+}
+
+int from_ip_header(ip_header *header, uint8_t *buffer) {
+    ip_header temp = *header;
+    temp.src_addr = htonl(temp.src_addr);
+    temp.dest_addr = htonl(temp.dest_addr);
+
+    return 0;
+}
+
 uint16_t checksum(uint16_t *payload, uint32_t count, uint32_t start) {
     uint32_t sum = start;
     while (count > 1) {
@@ -58,10 +75,10 @@ int tcp_checksum(tcp_ip_header *iph, tcp_header *tcph, uint8_t *payload) {
 
     uint32_t sum = 0;
 
-    sum += iph->src_addr;
-    sum += iph->dest_addr;
-    sum += (uint32_t)IPPROTO_TCP;
-    sum += (uint32_t)iph->tcp_len;
+    sum += htonl(iph->src_addr);
+    sum += htonl(iph->dest_addr);
+    sum += htons(IPPROTO_TCP);
+    sum += htons(tcp_len);
 
     uint8_t data_len = tcp_len - (tcph->doff << 2);
 
@@ -69,7 +86,8 @@ int tcp_checksum(tcp_ip_header *iph, tcp_header *tcph, uint8_t *payload) {
     return 0;
 }
 
-int ip_checksum(tcp_ip_header *iph, uint8_t *payload) {
-    uint32_t checksum = 0;
+int ip_checksum(ip_header *iph) {
+    iph->check = 0;
+    iph->check = checksum((uint16_t *)iph, iph->ihl << 2, 0);
     return 0;
 }

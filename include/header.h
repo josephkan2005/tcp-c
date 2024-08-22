@@ -16,18 +16,18 @@ typedef struct tcp_header {
     uint32_t seq;
     uint32_t seq_ack;
 
-    uint8_t doff : 4;
     uint8_t res : 6;
+    uint8_t doff : 4;
 
     // Flags
-    uint8_t urg : 1, ack : 1, psh : 1, rst : 1, syn : 1, fin : 1;
+    uint8_t fin : 1, sin : 1, rst : 1, psh : 1, ack : 1, urg : 1;
 
     uint16_t wnd;
 
     uint16_t check;
     uint16_t urg_ptr;
 
-    char opts[];
+    uint8_t opts[];
 
 } __attribute__((packed)) tcp_header;
 
@@ -39,8 +39,31 @@ typedef struct tcp_ip_header {
     uint8_t tcp_len;
 } __attribute__((packed)) tcp_ip_header;
 
+typedef struct ip_header {
+    uint8_t ihl : 4;
+    uint8_t ver : 4;
+    uint8_t tos;
+    uint16_t len;
+    uint16_t id;
+    uint16_t frag;
+    uint8_t ttl;
+    uint8_t proto;
+    uint16_t check;
+    uint32_t src_addr;
+    uint32_t dest_addr;
+    uint8_t opts[];
+} __attribute__((packed)) ip_header;
+
 int to_tcp_header(tcp_header *header, uint8_t *buffer);
 
-int calculate_checksum(tcp_ip_header *iph, tcp_header *tcph, uint8_t *payload);
-
 int from_tcp_header(tcp_header *header, uint8_t *buffer);
+
+int to_ip_header(ip_header *header, uint8_t *buffer);
+
+int from_ip_header(ip_header *header, uint8_t *buffer);
+
+uint16_t checksum(uint16_t *payload, uint32_t count, uint32_t start);
+
+int tcp_checksum(tcp_ip_header *iph, tcp_header *tcph, uint8_t *payload);
+
+int ip_checksum(ip_header *iph);

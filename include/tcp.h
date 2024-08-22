@@ -39,7 +39,7 @@ typedef struct tcp_rcv {
     uint32_t irs;
 } tcp_rcv;
 
-int tcp_open(uint16_t port, uint32_t addr, bool active);
+int tcp_open(uint16_t port, uint32_t addr, uint8_t active);
 
 int tcp_send();
 
