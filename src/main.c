@@ -1,4 +1,5 @@
 #include "header.h"
+#include "tcp.h"
 #include "utils.h"
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -104,6 +105,15 @@ int main(int argc, char **argv) {
             from_tcp_header(&tcph, testbuf);
 
             print_hex(testbuf, tcph.doff << 2);
+
+            ip_header niph;
+            niph.dest_addr = 0;
+            niph.src_addr = 0;
+
+            tcp_connect();
+            tcp_write();
+            tcp_read();
+            tcp_disconnect();
 
             printf("\n");
         }

@@ -2,9 +2,15 @@
 #include "header.h"
 #include <stdint.h>
 #include <stdio.h>
+#include <sys/poll.h>
+#include <unistd.h>
 
-int tcp_connect() {
+int tcp_connect(int *read_stream, int *write_stream) {
     printf("Connect");
+    int input[2];
+    int output[2];
+    pipe(input);
+    pipe(output);
     return 0;
 }
 
@@ -52,5 +58,39 @@ int tcp_abort() {
 
 int tcp_status() {
     printf("Status");
+    return 0;
+}
+
+int tcp_loop(tcp_connection *tcb) {
+    int ready;
+    while (1) {
+        ready = poll(tcb->rw_pipes,
+                     sizeof(tcb->rw_pipes) / sizeof(struct pollfd), 10);
+        if (ready == -1) {
+            printf("Poll errored");
+            break;
+        }
+        tcb->state_func(tcb);
+    }
+    return 0;
+}
+
+int tcp_state_closed(tcp_connection *tcb) {
+    printf("Closed state");
+    tcb->state = TCP_SYN_SENT;
+    tcb->state_func = tcp_state_syn_sent;
+
+    return 0;
+}
+
+int tcp_state_syn_sent(tcp_connection *tcb) {
+    printf("Syn sent state");
+
+    return 0;
+}
+
+int tcp_state_established(tcp_connection *tcb) {
+    printf("Established state");
+
     return 0;
 }

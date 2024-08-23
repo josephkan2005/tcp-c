@@ -1,5 +1,4 @@
 #pragma once
-#include <stdbool.h>
 #include <stdint.h>
 
 #define TCP_FIN 0x01
@@ -8,6 +7,12 @@
 #define TCP_PSH 0x08
 #define TCP_ACK 0x10
 #define TCP_URG 0x20
+
+enum tcp_options {
+    TCP_EOL = 0,
+    TCP_NOOP = 1,
+    TCP_MSS = 2,
+};
 
 typedef struct tcp_header {
     uint16_t src_port;
@@ -65,7 +70,3 @@ uint16_t checksum(uint16_t *payload, uint32_t count, uint32_t start);
 int tcp_checksum(tcp_ip_header *iph, tcp_header *tcph, uint8_t *payload);
 
 int ip_checksum(ip_header *iph);
-
-void print_tcp_header(tcp_header *tcph);
-
-void print_ip_header(ip_header *iph);
