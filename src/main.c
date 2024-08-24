@@ -1,5 +1,4 @@
 #include "header.h"
-#include "tcp.h"
 #include "utils.h"
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -73,7 +72,6 @@ int main(int argc, char **argv) {
         }
     } else {
         while (1) {
-            printf("\n");
             int nread = read(tun_fd, buffer, sizeof(buffer));
             if (nread < 0) {
                 perror("Reading from interface");
@@ -88,11 +86,16 @@ int main(int argc, char **argv) {
             if (iph.ver != 4)
                 continue;
 
+            printf("\n");
+
             printf("nread: %d\n", nread);
 
             print_hex(buffer, nread);
 
             print_ip_header(&iph);
+            ip_checksum(&iph);
+
+            printf("ipchecksum: %04X\n", iph.check);
 
             tcp_header tcph;
 
@@ -100,20 +103,44 @@ int main(int argc, char **argv) {
 
             print_tcp_header(&tcph);
 
-            uint8_t testbuf[4096];
+            uint8_t buf[4096];
 
-            from_tcp_header(&tcph, testbuf);
+            uint32_t temp = iph.src_addr;
+            iph.src_addr = iph.dest_addr;
+            iph.dest_addr = temp;
+            iph.len = htons(IP_HEADER_SIZE + TCP_HEADER_SIZE);
 
-            print_hex(testbuf, tcph.doff << 2);
+            uint8_t empty[0];
 
-            ip_header niph;
-            niph.dest_addr = 0;
-            niph.src_addr = 0;
+            tcp_ip_header piph;
+            piph.zero = 0;
+            piph.dest_addr = iph.dest_addr;
+            piph.src_addr = iph.src_addr;
+            piph.protocol = IP_PROTO_TCP;
+            piph.tcp_len = 32;
 
-            tcp_connect();
-            tcp_write();
-            tcp_read();
-            tcp_disconnect();
+            uint16_t temp1 = tcph.src_port;
+            tcph.src_port = tcph.dest_port;
+            tcph.dest_port = temp1;
+            tcph.seq_ack = htonl(ntohl(tcph.seq) + 1);
+            tcph.seq = 0;
+            tcph.flags |= TCP_FLAG_ACK;
+            tcph.doff = 5;
+            tcph.check = tcp_checksum(&piph, &tcph, empty);
+
+            printf("=================================\n");
+
+            print_ip_header(&iph);
+            print_tcp_header(&tcph);
+
+            from_ip_header(&iph, buf);
+            from_tcp_header(&tcph, buf + IP_HEADER_SIZE);
+
+            printf("len: %d\n", ntohs(iph.len));
+
+            print_hex(buf, ntohs(iph.len));
+
+            write(tun_fd, buf, ntohs(iph.len));
 
             printf("\n");
         }

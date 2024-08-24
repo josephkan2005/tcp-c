@@ -1,5 +1,6 @@
 #pragma once
 
+#include "header.h"
 #include <stdint.h>
 #include <sys/poll.h>
 
@@ -39,6 +40,11 @@ typedef struct tcp_rcv {
     uint32_t irs;
 } tcp_rcv;
 
+typedef struct endpoint {
+    uint32_t addr;
+    uint16_t port;
+} endpoint;
+
 typedef struct tcp_connection {
     enum tcp_state state;
     tcp_snd snd;
@@ -46,6 +52,9 @@ typedef struct tcp_connection {
     int (*state_func)(struct tcp_connection *);
 
     struct pollfd rw_pipes[4];
+
+    endpoint src;
+    endpoint dest;
 } tcp_connection;
 
 int tcp_connect(int *read_stream, int *write_stream);

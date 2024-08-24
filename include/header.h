@@ -1,18 +1,29 @@
 #pragma once
 #include <stdint.h>
 
-#define TCP_FIN 0x01
-#define TCP_SYN 0x02
-#define TCP_RST 0x04
-#define TCP_PSH 0x08
-#define TCP_ACK 0x10
-#define TCP_URG 0x20
+#define TCP_FLAG_FIN 0x01
+#define TCP_FLAG_SYN 0x02
+#define TCP_FLAG_RST 0x04
+#define TCP_FLAG_PSH 0x08
+#define TCP_FLAG_ACK 0x10
+#define TCP_FLAG_URG 0x20
 
-enum tcp_options {
+#define TCP_HEADER_SIZE 20
+
+#define IP_PROTO_TCP 6
+#define IP_HEADER_SIZE 20
+
+enum tcp_option_kind {
     TCP_EOL = 0,
     TCP_NOOP = 1,
     TCP_MSS = 2,
 };
+
+typedef struct tcp_option {
+    enum tcp_option_kind kind;
+    uint8_t len;
+    uint8_t data[];
+} tcp_option;
 
 typedef struct tcp_header {
     uint16_t src_port;
@@ -54,12 +65,20 @@ typedef struct ip_header {
     uint16_t check;
     uint32_t src_addr;
     uint32_t dest_addr;
-    uint8_t opts[];
 } __attribute__((packed)) ip_header;
+
+tcp_header create_tcp_header(uint16_t src_port, uint16_t dest_port);
 
 int to_tcp_header(tcp_header *header, uint8_t *buffer);
 
 int from_tcp_header(tcp_header *header, uint8_t *buffer);
+
+int tcp_read_options(tcp_header *header, uint8_t *buffer);
+
+int tcp_write_options(tcp_header *header, uint8_t *buffer);
+
+ip_header create_ip_header(uint32_t src_addr, uint32_t dest_addr,
+                           uint16_t data_len);
 
 int to_ip_header(ip_header *header, uint8_t *buffer);
 

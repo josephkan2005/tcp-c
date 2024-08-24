@@ -2,6 +2,7 @@
 #include "header.h"
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 #include <sys/poll.h>
 #include <unistd.h>
 
@@ -75,8 +76,40 @@ int tcp_loop(tcp_connection *tcb) {
     return 0;
 }
 
+int tcp_transmit_dev(tcp_connection *tcb, uint8_t *payload, int payload_len) {
+    int dev_fd = tcb->rw_pipes[TCP_FD_DEV].fd;
+    uint8_t buf[4096];
+
+    tcp_header tcph = create_tcp_header(tcb->src.port, tcb->dest.port);
+    ip_header iph =
+        create_ip_header(tcb->src.addr, tcb->dest.addr,
+                         (tcph.doff << 2) + payload_len + IP_HEADER_SIZE);
+    tcp_ip_header piph;
+    piph.tcp_len = iph.len - IP_HEADER_SIZE;
+    piph.src_addr = iph.src_addr;
+    piph.dest_addr = iph.dest_addr;
+    piph.protocol = IP_PROTO_TCP;
+
+    tcph.check = tcp_checksum(&piph, &tcph, payload);
+    int offset = from_ip_header(&iph, buf);
+    offset += from_tcp_header(&tcph, buf + offset);
+    memcpy(buf + offset, payload, payload_len);
+
+    write(dev_fd, buf, offset + payload_len);
+    return 0;
+}
+
 int tcp_state_closed(tcp_connection *tcb) {
     printf("Closed state");
+
+    tcp_header tcph = create_tcp_header(tcb->src.port, tcb->dest.port);
+    tcph.seq = 0;
+    tcph.seq_ack = tcb->snd.nxt;
+    tcph.flags |= TCP_FLAG_SYN;
+    uint8_t data[0];
+
+    tcp_transmit_dev(tcb, data, 0);
+
     tcb->state = TCP_SYN_SENT;
     tcb->state_func = tcp_state_syn_sent;
 

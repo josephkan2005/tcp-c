@@ -5,60 +5,107 @@
 #include <stdio.h>
 #include <string.h>
 
+int tcp_read_options(tcp_header *header, uint8_t *buffer) {
+    int opt_len = (header->doff << 2) - TCP_HEADER_SIZE;
+
+    int nbytes = 0;
+    int written = 0;
+    while (nbytes < opt_len) {
+        uint8_t opt_kind = buffer[nbytes];
+        nbytes++;
+        switch (opt_kind) {
+        case TCP_MSS:
+            memcpy(header->opts + written, buffer + nbytes - 1, 4);
+            written += 4;
+
+            nbytes += buffer[nbytes];
+            break;
+        case TCP_EOL:
+        case TCP_NOOP:
+            break;
+        default:
+            printf("Option not supported");
+            nbytes += buffer[nbytes] - 1;
+            break;
+        }
+    }
+
+    return opt_len;
+}
+
+int tcp_write_options(tcp_header *header, uint8_t *buffer) {
+    int opt_len = (header->doff << 2) - TCP_HEADER_SIZE;
+
+    memcpy(header->opts, buffer, opt_len);
+
+    return 0;
+}
+
+tcp_header create_tcp_header(uint16_t src_port, uint16_t dest_port) {
+    tcp_header tcph;
+    tcph.src_port = src_port;
+    tcph.dest_port = dest_port;
+
+    tcph.seq = 0;
+
+    tcph.seq_ack = 0;
+
+    tcph.doff = 5;
+    tcph.res = 0;
+    tcph.flags = 0;
+    tcph.wnd = htons(10);
+
+    tcph.check = 0;
+    tcph.urg_ptr = 0;
+
+    return tcph;
+}
+
 int to_tcp_header(tcp_header *header, uint8_t *buffer) {
     memcpy(header, buffer, sizeof(tcp_header));
-    header->src_port = ntohs(header->src_port);
-    header->dest_port = ntohs(header->dest_port);
-    header->seq = ntohl(header->seq);
-    header->seq_ack = ntohl(header->seq_ack);
-
-    header->wnd = ntohs(header->wnd);
-    header->check = ntohs(header->check);
-    header->urg_ptr = ntohs(header->urg_ptr);
+    tcp_read_options(header, buffer + TCP_HEADER_SIZE);
 
     return 0;
 }
 
 int from_tcp_header(tcp_header *header, uint8_t *buffer) {
-    tcp_header temp = *header;
-    temp.src_port = htons(header->src_port);
-    temp.dest_port = htons(header->dest_port);
-    temp.seq = htonl(header->seq);
-    temp.seq_ack = htonl(header->seq_ack);
+    memcpy(buffer, header, header->doff << 2);
 
-    temp.wnd = htons(header->wnd);
-    temp.check = htons(header->check);
-    temp.urg_ptr = htons(header->urg_ptr);
+    return sizeof(tcp_header);
+}
 
-    memcpy(buffer, &temp, sizeof(tcp_header));
+ip_header create_ip_header(uint32_t src_addr, uint32_t dest_addr,
+                           uint16_t data_len) {
+    ip_header iph;
 
-    return 0;
+    iph.ver = 4;
+    iph.ihl = 5;
+    iph.tos = 0;
+    iph.len = htons(data_len);
+    iph.id = 0;
+    iph.frag = 0;
+    iph.ttl = 10;
+    iph.proto = 6;
+    iph.check = 0;
+    iph.src_addr = src_addr;
+    iph.dest_addr = dest_addr;
+
+    return iph;
 }
 
 int to_ip_header(ip_header *header, uint8_t *buffer) {
     // *header = *(ip_header *)buffer;
-    memcpy(header, buffer, sizeof(ip_header));
-    header->dest_addr = ntohl(header->dest_addr);
-    header->src_addr = ntohl(header->src_addr);
-    header->id = ntohs(header->len);
-    header->len = ntohs(header->len);
-    header->check = ntohs(header->check);
+    memcpy(header, buffer, IP_HEADER_SIZE);
     return 0;
 }
 
 int from_ip_header(ip_header *header, uint8_t *buffer) {
-    ip_header temp = *header;
+    header->check = ip_checksum(header);
+    header->check = htons(header->check);
 
-    temp.src_addr = htonl(temp.src_addr);
-    temp.dest_addr = htonl(temp.dest_addr);
-    temp.id = htons(temp.len);
-    temp.len = htons(temp.len);
-    temp.check = ip_checksum(header);
-    temp.check = htons(temp.check);
+    memcpy(buffer, header, sizeof(ip_header));
 
-    memcpy(buffer, &temp, sizeof(ip_header));
-
-    return 0;
+    return sizeof(ip_header);
 }
 
 uint16_t checksum(uint16_t *payload, uint32_t count, uint32_t start) {
@@ -69,7 +116,7 @@ uint16_t checksum(uint16_t *payload, uint32_t count, uint32_t start) {
     }
 
     if (count > 0) {
-        sum += *(uint8_t *)(payload);
+        sum += (*payload) & htons(0xFF00);
     }
 
     while (sum >> 16) {
@@ -79,6 +126,12 @@ uint16_t checksum(uint16_t *payload, uint32_t count, uint32_t start) {
     return (uint16_t)(~sum);
 }
 
+// 45 00 00 3C 0F C7 40 00 40 06 A9 A0 C0 A8 00 01 C0 A8 00 03 BF E4 1F 40 B6 93
+// F1 F2 00 00 00 00 A0 02 FA F0 3E 8F 00 00 02 04 05 B4 04 02 08 0A 03 87 01 F9
+// 00 00 00 00 01 03 03 07 45 00 00 3C 0F C8 40 00 40 06 A9 9F C0 A8 00 01 C0 A8
+// 00 03 BF E4 1F 40 B6 93 F1 F2 00 00 00 00 A0 02 FA F0 3A 80 00 00 02 04 05 B4
+// 04 02 08 0A 03 87 06 08 00 00 00 00 01 03 03 07
+
 int tcp_checksum(tcp_ip_header *iph, tcp_header *tcph, uint8_t *payload) {
     tcph->check = 0;
 
@@ -86,10 +139,15 @@ int tcp_checksum(tcp_ip_header *iph, tcp_header *tcph, uint8_t *payload) {
 
     uint32_t sum = 0;
 
-    sum += htonl(iph->src_addr);
-    sum += htonl(iph->dest_addr);
-    sum += htons(IPPROTO_TCP);
-    sum += htons(tcp_len);
+    sum += iph->src_addr;
+    sum += iph->dest_addr;
+    sum += htonl(IPPROTO_TCP);
+    sum += tcp_len;
+
+    int opt_len = tcph->doff - (TCP_HEADER_SIZE >> 2);
+    for (int i = 0; i < opt_len; i++) {
+        sum += *(((uint32_t *)tcph->opts) + i);
+    }
 
     uint8_t data_len = tcp_len - (tcph->doff << 2);
 
