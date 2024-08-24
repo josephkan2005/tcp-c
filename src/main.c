@@ -92,16 +92,9 @@ int main(int argc, char **argv) {
 
             print_hex(buffer, nread);
 
-            print_ip_header(&iph);
-            ip_checksum(&iph);
-
-            printf("ipchecksum: %04X\n", iph.check);
-
             tcp_header tcph;
 
             to_tcp_header(&tcph, buffer + (iph.ihl << 2));
-
-            print_tcp_header(&tcph);
 
             uint8_t buf[4096];
 
@@ -128,15 +121,8 @@ int main(int argc, char **argv) {
             tcph.doff = 5;
             tcp_checksum(&piph, &tcph, empty);
 
-            printf("=================================\n");
-
-            print_ip_header(&iph);
-            print_tcp_header(&tcph);
-
             from_ip_header(&iph, buf);
             from_tcp_header(&tcph, buf + IP_HEADER_SIZE);
-
-            print_ip_header(&iph);
 
             write(tun_fd, buf, ntohs(iph.len));
 

@@ -85,6 +85,6 @@ int from_ip_header(ip_header *header, uint8_t *buffer);
 
 uint16_t checksum(uint16_t *payload, uint32_t count, uint32_t start);
 
-int tcp_checksum(tcp_ip_header *iph, tcp_header *tcph, uint8_t *payload);
+uint16_t tcp_checksum(tcp_ip_header *iph, tcp_header *tcph, uint8_t *payload);
 
-int ip_checksum(ip_header *iph);
+uint16_t ip_checksum(ip_header *iph);

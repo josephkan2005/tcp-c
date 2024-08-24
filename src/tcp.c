@@ -1,5 +1,6 @@
 #include "tcp.h"
 #include "header.h"
+#include <netinet/in.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -85,10 +86,10 @@ int tcp_transmit_dev(tcp_connection *tcb, uint8_t *payload, int payload_len) {
         create_ip_header(tcb->src.addr, tcb->dest.addr,
                          (tcph.doff << 2) + payload_len + IP_HEADER_SIZE);
     tcp_ip_header piph;
-    piph.tcp_len = iph.len - IP_HEADER_SIZE;
+    piph.tcp_len = htons(ntohs(iph.len) - IP_HEADER_SIZE);
     piph.src_addr = iph.src_addr;
     piph.dest_addr = iph.dest_addr;
-    piph.protocol = IP_PROTO_TCP;
+    piph.protocol = htons(IP_PROTO_TCP);
 
     tcph.check = tcp_checksum(&piph, &tcph, payload);
     int offset = from_ip_header(&iph, buf);
@@ -104,7 +105,7 @@ int tcp_state_closed(tcp_connection *tcb) {
 
     tcp_header tcph = create_tcp_header(tcb->src.port, tcb->dest.port);
     tcph.seq = 0;
-    tcph.seq_ack = tcb->snd.nxt;
+    tcph.seq_ack = htonl(tcb->snd.nxt);
     tcph.flags |= TCP_FLAG_SYN;
     uint8_t data[0];
 

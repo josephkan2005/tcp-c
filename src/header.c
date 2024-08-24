@@ -63,16 +63,14 @@ tcp_header create_tcp_header(uint16_t src_port, uint16_t dest_port) {
 }
 
 int to_tcp_header(tcp_header *header, uint8_t *buffer) {
-    memcpy(header, buffer, sizeof(tcp_header));
+    memcpy(header, buffer, TCP_HEADER_SIZE);
     tcp_read_options(header, buffer + TCP_HEADER_SIZE);
-
-    return 0;
+    return header->doff << 2;
 }
 
 int from_tcp_header(tcp_header *header, uint8_t *buffer) {
     memcpy(buffer, header, header->doff << 2);
-
-    return sizeof(tcp_header);
+    return header->doff << 2;
 }
 
 ip_header create_ip_header(uint32_t src_addr, uint32_t dest_addr,
@@ -97,15 +95,14 @@ ip_header create_ip_header(uint32_t src_addr, uint32_t dest_addr,
 int to_ip_header(ip_header *header, uint8_t *buffer) {
     // *header = *(ip_header *)buffer;
     memcpy(header, buffer, IP_HEADER_SIZE);
-    return 0;
+    return IP_HEADER_SIZE;
 }
 
 int from_ip_header(ip_header *header, uint8_t *buffer) {
     ip_checksum(header);
 
-    memcpy(buffer, header, sizeof(ip_header));
-
-    return sizeof(ip_header);
+    memcpy(buffer, header, IP_HEADER_SIZE);
+    return IP_HEADER_SIZE;
 }
 
 uint16_t checksum(uint16_t *payload, uint32_t count, uint32_t start) {
@@ -126,7 +123,7 @@ uint16_t checksum(uint16_t *payload, uint32_t count, uint32_t start) {
     return (uint16_t)(~sum);
 }
 
-int tcp_checksum(tcp_ip_header *piph, tcp_header *tcph, uint8_t *payload) {
+uint16_t tcp_checksum(tcp_ip_header *piph, tcp_header *tcph, uint8_t *payload) {
     tcph->check = 0;
 
     uint8_t tcp_len = ntohs(piph->tcp_len);
@@ -152,12 +149,11 @@ int tcp_checksum(tcp_ip_header *piph, tcp_header *tcph, uint8_t *payload) {
     tcph->check =
         checksum((uint16_t *)payload, tcp_len - (tcph->doff << 2), sum);
 
-    return 0;
+    return tcph->check;
 }
 
-int ip_checksum(ip_header *iph) {
+uint16_t ip_checksum(ip_header *iph) {
     iph->check = 0;
     iph->check = checksum((uint16_t *)iph, iph->ihl << 2, 0);
-    print_hex((uint8_t *)&iph->check, 2);
-    return 0;
+    return iph->check;
 }
