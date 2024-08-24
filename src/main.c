@@ -113,20 +113,20 @@ int main(int argc, char **argv) {
             uint8_t empty[0];
 
             tcp_ip_header piph;
-            piph.zero = 0;
             piph.dest_addr = iph.dest_addr;
             piph.src_addr = iph.src_addr;
-            piph.protocol = IP_PROTO_TCP;
-            piph.tcp_len = 32;
+            piph.protocol = htons((uint16_t)IP_PROTO_TCP);
+            piph.tcp_len = htons(20);
 
             uint16_t temp1 = tcph.src_port;
             tcph.src_port = tcph.dest_port;
             tcph.dest_port = temp1;
             tcph.seq_ack = htonl(ntohl(tcph.seq) + 1);
+            tcph.wnd = htons((uint16_t)1024);
             tcph.seq = 0;
             tcph.flags |= TCP_FLAG_ACK;
             tcph.doff = 5;
-            tcph.check = tcp_checksum(&piph, &tcph, empty);
+            tcp_checksum(&piph, &tcph, empty);
 
             printf("=================================\n");
 
@@ -136,9 +136,7 @@ int main(int argc, char **argv) {
             from_ip_header(&iph, buf);
             from_tcp_header(&tcph, buf + IP_HEADER_SIZE);
 
-            printf("len: %d\n", ntohs(iph.len));
-
-            print_hex(buf, ntohs(iph.len));
+            print_ip_header(&iph);
 
             write(tun_fd, buf, ntohs(iph.len));
 

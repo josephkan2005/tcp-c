@@ -1,4 +1,5 @@
 #include "header.h"
+#include "utils.h"
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <stdint.h>
@@ -100,8 +101,7 @@ int to_ip_header(ip_header *header, uint8_t *buffer) {
 }
 
 int from_ip_header(ip_header *header, uint8_t *buffer) {
-    header->check = ip_checksum(header);
-    header->check = htons(header->check);
+    ip_checksum(header);
 
     memcpy(buffer, header, sizeof(ip_header));
 
@@ -126,37 +126,38 @@ uint16_t checksum(uint16_t *payload, uint32_t count, uint32_t start) {
     return (uint16_t)(~sum);
 }
 
-// 45 00 00 3C 0F C7 40 00 40 06 A9 A0 C0 A8 00 01 C0 A8 00 03 BF E4 1F 40 B6 93
-// F1 F2 00 00 00 00 A0 02 FA F0 3E 8F 00 00 02 04 05 B4 04 02 08 0A 03 87 01 F9
-// 00 00 00 00 01 03 03 07 45 00 00 3C 0F C8 40 00 40 06 A9 9F C0 A8 00 01 C0 A8
-// 00 03 BF E4 1F 40 B6 93 F1 F2 00 00 00 00 A0 02 FA F0 3A 80 00 00 02 04 05 B4
-// 04 02 08 0A 03 87 06 08 00 00 00 00 01 03 03 07
-
-int tcp_checksum(tcp_ip_header *iph, tcp_header *tcph, uint8_t *payload) {
+int tcp_checksum(tcp_ip_header *piph, tcp_header *tcph, uint8_t *payload) {
     tcph->check = 0;
 
-    uint8_t tcp_len = iph->tcp_len;
+    uint8_t tcp_len = ntohs(piph->tcp_len);
 
     uint32_t sum = 0;
 
-    sum += iph->src_addr;
-    sum += iph->dest_addr;
-    sum += htonl(IPPROTO_TCP);
-    sum += tcp_len;
+    sum += (piph->src_addr >> 16) & 0xFFFF;
+    sum += (piph->src_addr) & 0xFFFF;
 
-    int opt_len = tcph->doff - (TCP_HEADER_SIZE >> 2);
-    for (int i = 0; i < opt_len; i++) {
-        sum += *(((uint32_t *)tcph->opts) + i);
+    sum += (piph->dest_addr >> 16) & 0xFFFF;
+    sum += (piph->dest_addr) & 0xFFFF;
+
+    sum += piph->protocol;
+
+    sum += piph->tcp_len;
+
+    tcph->check = 0;
+
+    for (int i = 0; i < (tcph->doff) << 1; i++) {
+        sum += *((uint16_t *)tcph + i);
     }
 
-    uint8_t data_len = tcp_len - (tcph->doff << 2);
+    tcph->check =
+        checksum((uint16_t *)payload, tcp_len - (tcph->doff << 2), sum);
 
-    tcph->check = checksum((uint16_t *)payload, data_len, sum);
     return 0;
 }
 
 int ip_checksum(ip_header *iph) {
     iph->check = 0;
     iph->check = checksum((uint16_t *)iph, iph->ihl << 2, 0);
+    print_hex((uint8_t *)&iph->check, 2);
     return 0;
 }

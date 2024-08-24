@@ -48,9 +48,8 @@ typedef struct tcp_header {
 typedef struct tcp_ip_header {
     uint32_t src_addr;
     uint32_t dest_addr;
-    uint8_t zero;
-    uint8_t protocol;
-    uint8_t tcp_len;
+    uint16_t protocol;
+    uint16_t tcp_len;
 } __attribute__((packed)) tcp_ip_header;
 
 typedef struct ip_header {

@@ -5,14 +5,16 @@
 #include <stdio.h>
 
 void print_tcp_header(tcp_header *tcph) {
-    printf("\nsrc: %hu, dest: %hu, seq: %u, ack: %u, wnd: %hu, doff: "
-           "%X, res: %X, urg: %u, "
-           "ack: %u, psh: %u, rst: %u, syn: %u, fin: %u\n",
-           ntohs(tcph->src_port), ntohs(tcph->dest_port), ntohl(tcph->seq),
-           ntohl(tcph->seq_ack), ntohs(tcph->wnd), tcph->doff, tcph->res,
-           !!(tcph->flags & TCP_FLAG_URG), !!(tcph->flags & TCP_FLAG_ACK),
-           !!(tcph->flags & TCP_FLAG_PSH), !!(tcph->flags & TCP_FLAG_RST),
-           !!(tcph->flags & TCP_FLAG_SYN), !!(tcph->flags & TCP_FLAG_FIN));
+    printf(
+        "\nsrc: %hu, dest: %hu, seq: %u, ack: %u, wnd: %hu, check: %04x, doff: "
+        "%X, res: %X, urg: %u, "
+        "ack: %u, psh: %u, rst: %u, syn: %u, fin: %u\n",
+        ntohs(tcph->src_port), ntohs(tcph->dest_port), ntohl(tcph->seq),
+        ntohl(tcph->seq_ack), ntohs(tcph->wnd), tcph->check, tcph->doff,
+        tcph->res, !!(tcph->flags & TCP_FLAG_URG),
+        !!(tcph->flags & TCP_FLAG_ACK), !!(tcph->flags & TCP_FLAG_PSH),
+        !!(tcph->flags & TCP_FLAG_RST), !!(tcph->flags & TCP_FLAG_SYN),
+        !!(tcph->flags & TCP_FLAG_FIN));
 }
 
 void print_ip_header(ip_header *iph) {
@@ -30,6 +32,12 @@ void print_ip_header(ip_header *iph) {
            inet_ntop(AF_INET, &iph->src_addr, str, INET_ADDRSTRLEN));
     printf("dest_addr: %s\n",
            inet_ntop(AF_INET, &iph->dest_addr, str, INET_ADDRSTRLEN));
+}
+
+void print_tcp_ip_header(tcp_ip_header *piph) {
+    printf("\n");
+    print_hex((uint8_t *)piph, 12);
+    printf("\n");
 }
 
 void print_hex(uint8_t *buffer, int count) {
