@@ -54,7 +54,7 @@ tcp_header create_tcp_header(uint16_t src_port, uint16_t dest_port) {
     tcph.doff = 5;
     tcph.res = 0;
     tcph.flags = 0;
-    tcph.wnd = htons(10);
+    tcph.wnd = htons(1024);
 
     tcph.check = 0;
     tcph.urg_ptr = 0;
@@ -84,7 +84,7 @@ ip_header create_ip_header(uint32_t src_addr, uint32_t dest_addr,
     iph.id = 0;
     iph.frag = 0;
     iph.ttl = 10;
-    iph.proto = 6;
+    iph.proto = (uint8_t)IP_PROTO_TCP;
     iph.check = 0;
     iph.src_addr = src_addr;
     iph.dest_addr = dest_addr;
@@ -156,4 +156,12 @@ uint16_t ip_checksum(ip_header *iph) {
     iph->check = 0;
     iph->check = checksum((uint16_t *)iph, iph->ihl << 2, 0);
     return iph->check;
+}
+
+int wrapping_lt(uint32_t left, uint32_t right) {
+    return left - right > (1 << 31);
+}
+
+int wrapping_between(uint32_t left, uint32_t middle, uint32_t right) {
+    return wrapping_lt(left, middle) && wrapping_lt(middle, right);
 }
