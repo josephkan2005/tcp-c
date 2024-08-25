@@ -40,6 +40,13 @@ void print_tcp_ip_header(tcp_ip_header *piph) {
     printf("\n");
 }
 
+void print_tcp_tcb(tcp_tcb_snd *snd, tcp_tcb_rcv *rcv) {
+    printf("\n snd: iss: %u, una: %u, nxt: %u, wnd: %u, up: %u, wl1: %u, wl2: "
+           "%u \n rcv: irs: %u, nxt: %u, wnd: %u, up: %u \n",
+           snd->iss, snd->una, snd->nxt, snd->wnd, snd->up, snd->wl1, snd->wl2,
+           rcv->irs, rcv->nxt, rcv->wnd, rcv->up);
+}
+
 void print_hex(uint8_t *buffer, int count) {
     printf("\n");
     for (int i = 0; i < count; i++) {

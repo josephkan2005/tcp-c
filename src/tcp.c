@@ -8,6 +8,7 @@
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/poll.h>
@@ -135,10 +136,8 @@ int parse_event(tcp_connection *connection, tcp_event *event) {
 
             return -1;
         }
-        event->len = iph->len - (iph->ihl << 2);
-        printf("before memcpy\n");
+        event->len = ntohs(iph->len) - (iph->ihl << 2);
         memcpy(event->data, tcph, event->len);
-        printf("after memcpy\n");
         break;
     case TCP_FD_READ:
         printf("TCP_FD_READ\n");
@@ -152,8 +151,6 @@ int parse_event(tcp_connection *connection, tcp_event *event) {
         printf("No event found\n");
         return -1;
     }
-
-    printf("Parse event returend\n");
 
     return 0;
 }
@@ -170,8 +167,11 @@ int tcp_loop(tcp_connection *connection) {
         }
         printf("Polled: %d\n", ready);
 
-        tcp_event event;
-        if (parse_event(connection, &event) == -1) {
+        tcp_event *event;
+        printf("allocced size: %lu\n", MAX_BUF_SIZE + sizeof(tcp_event));
+        event = malloc(MAX_BUF_SIZE + sizeof(tcp_event));
+
+        if (parse_event(connection, event) == -1) {
             printf("event not parsed\n");
             sleep(1);
             continue;
@@ -179,9 +179,9 @@ int tcp_loop(tcp_connection *connection) {
 
         printf("parsed event\n");
 
-        printf("event type: %d\n", event.type);
+        printf("event type: %d\n", event->type);
 
-        if (event.type == TCP_EVENT_ABORT) {
+        if (event->type == TCP_EVENT_ABORT) {
             break;
         }
 
@@ -189,7 +189,8 @@ int tcp_loop(tcp_connection *connection) {
         if (connection->state == TCP_CLOSED) {
             break;
         }
-        sleep(2);
+        free(event);
+        sleep(1);
     }
     return 0;
 }
@@ -306,21 +307,22 @@ int tcp_state_closed(tcp_connection *connection) {
     return 0;
 }
 
-int tcp_state_syn_sent(tcp_connection *connection, tcp_event event) {
+int tcp_state_syn_sent(tcp_connection *connection, tcp_event *event) {
     printf("Syn sent state\n");
-    switch (event.type) {
+    switch (event->type) {
     case TCP_EVENT_SEGMENT_ARRIVES:
-        tcp_header *tcph = (tcp_header *)event.data;
+        tcp_header *tcph = (tcp_header *)event->data;
+        print_tcp_header(tcph);
         if (tcph->flags & TCP_FLAG_ACK) {
-            if (wrapping_lt(tcph->seq_ack, connection->snd.iss - 1) ||
-                wrapping_lt(connection->snd.nxt, tcph->seq_ack)) {
+            if (wrapping_lt(ntohl(tcph->seq_ack), connection->snd.iss - 1) ||
+                wrapping_lt(connection->snd.nxt, ntohl(tcph->seq_ack))) {
                 printf("Ack not acceptable\n");
                 if (!(tcph->flags & TCP_FLAG_RST)) {
                     tcp_send_rst(connection);
                 }
                 break;
             }
-            if (!wrapping_between(connection->snd.una - 1, tcph->seq_ack,
+            if (!wrapping_between(connection->snd.una - 1, ntohl(tcph->seq_ack),
                                   connection->snd.nxt + 1)) {
                 printf("Ack not acceptable\n");
                 break;
@@ -333,9 +335,9 @@ int tcp_state_syn_sent(tcp_connection *connection, tcp_event event) {
         }
 
         if (tcph->flags & TCP_FLAG_SYN) {
-            connection->rcv.nxt = tcph->seq + 1;
-            connection->rcv.irs = tcph->seq;
-            connection->snd.una = tcph->seq_ack;
+            connection->rcv.nxt = ntohl(tcph->seq) + 1;
+            connection->rcv.irs = ntohl(tcph->seq);
+            connection->snd.una = ntohl(tcph->seq_ack);
             // Remove appropriate retransmission segments
 
             if (wrapping_lt(connection->snd.iss, connection->snd.una)) {
@@ -343,8 +345,8 @@ int tcp_state_syn_sent(tcp_connection *connection, tcp_event event) {
                 connection->state_func = tcp_state_established;
                 tcp_header new_tcph = create_tcp_header(connection->src.port,
                                                         connection->dest.port);
-                new_tcph.seq = connection->snd.nxt;
-                new_tcph.seq_ack = connection->rcv.nxt;
+                new_tcph.seq = htonl(connection->snd.nxt);
+                new_tcph.seq_ack = htonl(connection->rcv.nxt);
                 new_tcph.flags |= TCP_FLAG_ACK;
                 tcp_transmit_dev(connection, &new_tcph, NULL, 0);
                 break;
@@ -353,8 +355,8 @@ int tcp_state_syn_sent(tcp_connection *connection, tcp_event event) {
                 connection->state_func = tcp_state_syn_received;
                 tcp_header new_tcph = create_tcp_header(connection->src.port,
                                                         connection->dest.port);
-                new_tcph.seq = connection->snd.iss;
-                new_tcph.seq_ack = connection->rcv.nxt;
+                new_tcph.seq = htonl(connection->snd.iss);
+                new_tcph.seq_ack = htonl(connection->rcv.nxt);
                 tcp_transmit_dev(connection, &new_tcph, NULL, 0);
                 break;
             }
@@ -369,12 +371,12 @@ int tcp_state_syn_sent(tcp_connection *connection, tcp_event event) {
     return 0;
 }
 
-int tcp_state_syn_received(tcp_connection *connection, tcp_event event) {
+int tcp_state_syn_received(tcp_connection *connection, tcp_event *event) {
     printf("Syn received state\n");
     return 0;
 }
 
-int tcp_state_established(tcp_connection *connection, tcp_event event) {
+int tcp_state_established(tcp_connection *connection, tcp_event *event) {
     printf("Established state\n");
 
     return 0;

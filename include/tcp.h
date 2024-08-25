@@ -70,7 +70,7 @@ typedef struct tcp_connection {
     enum tcp_state state;
     tcp_tcb_snd snd;
     tcp_tcb_rcv rcv;
-    int (*state_func)(struct tcp_connection *, tcp_event);
+    int (*state_func)(struct tcp_connection *, tcp_event *);
 
     struct pollfd in_r_fds[3];
     int in_w_fds[3];
@@ -112,6 +112,6 @@ int tcp_loop(tcp_connection *connection);
 int tcp_check_valid(tcp_connection *connection, tcp_header *tcph);
 
 int tcp_state_closed(tcp_connection *connection);
-int tcp_state_syn_received(tcp_connection *connection, tcp_event event);
-int tcp_state_syn_sent(tcp_connection *connection, tcp_event event);
-int tcp_state_established(tcp_connection *connection, tcp_event event);
+int tcp_state_syn_received(tcp_connection *connection, tcp_event *event);
+int tcp_state_syn_sent(tcp_connection *connection, tcp_event *event);
+int tcp_state_established(tcp_connection *connection, tcp_event *event);
