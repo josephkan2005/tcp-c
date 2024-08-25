@@ -93,43 +93,52 @@ int tcp_status() {
 }
 
 int parse_event(tcp_connection *connection, tcp_event *event) {
-    int fd = -1;
+    int fd_idx = -1;
     int num_fd = sizeof(connection->in_r_fds) / sizeof(struct pollfd);
     for (int i = 0; i < num_fd; i++) {
         if (connection->in_r_fds[i].revents & POLLIN) {
-            fd = i;
+            fd_idx = i;
             break;
         }
     }
 
-    printf("FD: %d\n", fd);
+    int fd = connection->in_r_fds[fd_idx].fd;
 
-    switch (fd) {
+    switch (fd_idx) {
     case TCP_FD_DEV:
-        printf("TCP_FD_DEV: %d\n", connection->in_r_fds[TCP_FD_DEV].fd);
-        printf("FD DEV: %d\n", connection->in_r_fds[TCP_FD_DEV].revents);
         event->type = TCP_EVENT_SEGMENT_ARRIVES;
         uint8_t buf[MAX_BUF_SIZE];
-        int bytes_read = read(fd, &buf, MAX_BUF_SIZE);
-        printf("Bytes read: %d\n", bytes_read);
-        ip_header *iph = (ip_header *)&buf;
-        print_ip_header(iph);
+        int bytes_read = read(fd, buf, MAX_BUF_SIZE);
+        ip_header *iph = (ip_header *)buf;
         if (iph->ver != 4 || iph->proto != (uint8_t)IP_PROTO_TCP ||
             (iph->ihl << 2) != IP_HEADER_SIZE) {
             return -1;
         }
         if (iph->src_addr != connection->dest.addr ||
             iph->dest_addr != connection->src.addr) {
+
+            printf("Addr mismatch: %d %d %d %d\n", htonl(iph->src_addr),
+                   htonl(iph->dest_addr), htonl(connection->src.addr),
+                   htonl(connection->dest.addr));
+
             return -1;
         }
-        tcp_header *tcph = (tcp_header *)(&buf + (iph->ihl << 2));
-        print_tcp_header(tcph);
+
+        tcp_header *tcph = (tcp_header *)(buf + (iph->ihl << 2));
+
         if (tcph->src_port != connection->dest.port ||
             tcph->dest_port != connection->src.port) {
+
+            printf("Ports mismatch: %d %d %d %d\n", htons(tcph->src_port),
+                   htons(tcph->dest_port), htons(connection->src.port),
+                   htons(connection->dest.port));
+
             return -1;
         }
         event->len = iph->len - (iph->ihl << 2);
+        printf("before memcpy\n");
         memcpy(event->data, tcph, event->len);
+        printf("after memcpy\n");
         break;
     case TCP_FD_READ:
         printf("TCP_FD_READ\n");
@@ -143,6 +152,8 @@ int parse_event(tcp_connection *connection, tcp_event *event) {
         printf("No event found\n");
         return -1;
     }
+
+    printf("Parse event returend\n");
 
     return 0;
 }
@@ -161,9 +172,14 @@ int tcp_loop(tcp_connection *connection) {
 
         tcp_event event;
         if (parse_event(connection, &event) == -1) {
-            sleep(2);
+            printf("event not parsed\n");
+            sleep(1);
             continue;
         }
+
+        printf("parsed event\n");
+
+        printf("event type: %d\n", event.type);
 
         if (event.type == TCP_EVENT_ABORT) {
             break;
