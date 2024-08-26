@@ -119,3 +119,4 @@ int tcp_state_syn_received(tcp_connection *connection, tcp_event *event);
 int tcp_state_syn_sent(tcp_connection *connection, tcp_event *event);
 int tcp_state_established(tcp_connection *connection, tcp_event *event);
 int tcp_state_close_wait(tcp_connection *connection, tcp_event *event);
+int tcp_state_last_ack(tcp_connection *connection, tcp_event *event);

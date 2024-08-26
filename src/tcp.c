@@ -173,8 +173,9 @@ int tcp_loop(tcp_connection *connection) {
             return -1;
         }
         for (int i = 0; i < 3; i++) {
-            printf("fd %d: revents: %hu pollin: %hu\n", i,
+            printf("fd %d: revents: %hu events: %hu pollin: %hu\n", i,
                    connection->in_r_fds[i].revents,
+                   connection->in_r_fds[i].events,
                    connection->in_r_fds[i].revents & POLLIN);
         }
 
@@ -486,6 +487,7 @@ int tcp_state_established(tcp_connection *connection, tcp_event *event) {
             tcp_transmit_dev(connection, &new_tcph, NULL, 0);
             connection->state = TCP_CLOSE_WAIT;
             connection->state_func = tcp_state_close_wait;
+            return 1;
         }
 
     } break;
@@ -506,6 +508,44 @@ int tcp_state_established(tcp_connection *connection, tcp_event *event) {
 
 int tcp_state_close_wait(tcp_connection *connection, tcp_event *event) {
     printf("Close wait state\n");
+    tcp_header new_tcph =
+        create_tcp_header(connection->src.port, connection->dest.port);
+    new_tcph.seq = connection->snd.nxt;
+    new_tcph.seq_ack = connection->rcv.nxt;
+    new_tcph.flags |= TCP_FLAG_ACK;
+    new_tcph.flags |= TCP_FLAG_FIN;
+    connection->snd.nxt += 1;
 
+    tcp_transmit_dev(connection, &new_tcph, NULL, 0);
+
+    connection->state = TCP_LAST_ACK;
+    connection->state_func = tcp_state_last_ack;
+
+    return 1;
+}
+
+int tcp_state_last_ack(tcp_connection *connection, tcp_event *event) {
+    printf("Last ack state\n");
+    switch (event->type) {
+    case TCP_EVENT_SEGMENT_ARRIVES: {
+        tcp_header *tcph = (tcp_header *)event->data;
+        if (tcph->flags & TCP_FLAG_ACK) {
+            if (tcph->seq_ack == connection->snd.nxt) {
+                connection->state = TCP_CLOSED;
+                break;
+            }
+        }
+    } break;
+    case TCP_EVENT_OPEN:
+    case TCP_EVENT_SEND:
+    case TCP_EVENT_RECEIVE:
+    case TCP_EVENT_CLOSE:
+    case TCP_EVENT_ABORT:
+    case TCP_EVENT_STATUS:
+    case TCP_EVENT_USER_TIMEOUT:
+    case TCP_EVENT_RETRANSMISSION_TIMEOUT:
+    case TCP_EVENT_TIME_WAIT_TIMEOUT:
+        break;
+    }
     return 0;
 }

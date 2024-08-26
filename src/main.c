@@ -66,7 +66,7 @@ int main(int argc, char **argv) {
     tcp_connection connection;
     endpoint src, dest;
     src = create_endpoint(0xc0a80003, 8000);
-    dest = create_endpoint(0xc0a80001, 9001);
+    dest = create_endpoint(0xc0a80001, 9002);
     tcp_connect(&connection, src, dest, tun_fd);
 
     /* uint32_t buf = 0x00110011;
