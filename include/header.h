@@ -10,6 +10,8 @@
 
 #define TCP_HEADER_SIZE 20
 
+#define TCP_IP_HEADER_SIZE 12
+
 #define IP_PROTO_TCP 6
 #define IP_HEADER_SIZE 20
 
@@ -68,16 +70,25 @@ typedef struct ip_header {
 
 tcp_header create_tcp_header(uint16_t src_port, uint16_t dest_port);
 
+int convert_tcp_header_ne(tcp_header *header);
+int convert_tcp_header_he(tcp_header *header);
+
 int to_tcp_header(tcp_header *header, uint8_t *buffer);
 
-int from_tcp_header(tcp_header *header, uint8_t *buffer);
+int from_tcp_header(tcp_header *header, tcp_ip_header *ip_header,
+                    uint8_t *payload, uint8_t *buffer);
 
 int tcp_read_options(tcp_header *header, uint8_t *buffer);
 
 int tcp_write_options(tcp_header *header, uint8_t *buffer);
 
+int convert_tcp_ip_header_ne(tcp_ip_header *header);
+
 ip_header create_ip_header(uint32_t src_addr, uint32_t dest_addr,
                            uint16_t data_len);
+
+int convert_ip_header_ne(ip_header *header);
+int convert_ip_header_he(ip_header *header);
 
 int to_ip_header(ip_header *header, uint8_t *buffer);
 

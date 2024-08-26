@@ -1,7 +1,9 @@
 #include "utils.h"
 #include "header.h"
+#include "tcp.h"
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <stdint.h>
 #include <stdio.h>
 
 void print_tcp_header(tcp_header *tcph) {
@@ -9,9 +11,8 @@ void print_tcp_header(tcp_header *tcph) {
         "\nsrc: %hu, dest: %hu, seq: %u, ack: %u, wnd: %hu, check: %04x, doff: "
         "%X, res: %X, urg: %u, "
         "ack: %u, psh: %u, rst: %u, syn: %u, fin: %u\n",
-        ntohs(tcph->src_port), ntohs(tcph->dest_port), ntohl(tcph->seq),
-        ntohl(tcph->seq_ack), ntohs(tcph->wnd), tcph->check, tcph->doff,
-        tcph->res, !!(tcph->flags & TCP_FLAG_URG),
+        tcph->src_port, tcph->dest_port, tcph->seq, tcph->seq_ack, tcph->wnd,
+        tcph->check, tcph->doff, tcph->res, !!(tcph->flags & TCP_FLAG_URG),
         !!(tcph->flags & TCP_FLAG_ACK), !!(tcph->flags & TCP_FLAG_PSH),
         !!(tcph->flags & TCP_FLAG_RST), !!(tcph->flags & TCP_FLAG_SYN),
         !!(tcph->flags & TCP_FLAG_FIN));
@@ -28,10 +29,12 @@ void print_ip_header(ip_header *iph) {
     printf("\n");
 
     char str[INET6_ADDRSTRLEN];
+    uint32_t src_addr = htonl(iph->src_addr);
+    uint32_t dest_addr = htonl(iph->dest_addr);
     printf("src_addr: %s\n",
-           inet_ntop(AF_INET, &iph->src_addr, str, INET_ADDRSTRLEN));
+           inet_ntop(AF_INET, &src_addr, str, INET_ADDRSTRLEN));
     printf("dest_addr: %s\n",
-           inet_ntop(AF_INET, &iph->dest_addr, str, INET_ADDRSTRLEN));
+           inet_ntop(AF_INET, &dest_addr, str, INET_ADDRSTRLEN));
 }
 
 void print_tcp_ip_header(tcp_ip_header *piph) {
@@ -45,6 +48,41 @@ void print_tcp_tcb(tcp_tcb_snd *snd, tcp_tcb_rcv *rcv) {
            "%u \n rcv: irs: %u, nxt: %u, wnd: %u, up: %u \n",
            snd->iss, snd->una, snd->nxt, snd->wnd, snd->up, snd->wl1, snd->wl2,
            rcv->irs, rcv->nxt, rcv->wnd, rcv->up);
+}
+
+void print_tcp_event_type(enum tcp_event_type type) {
+    switch (type) {
+    case TCP_EVENT_OPEN:
+        printf("event type: %s", "TCP_EVENT_OPEN");
+        break;
+    case TCP_EVENT_SEND:
+        printf("event type: %s", "TCP_EVENT_SEND");
+        break;
+    case TCP_EVENT_RECEIVE:
+        printf("event type: %s", "TCP_EVENT_RECEIVE");
+        break;
+    case TCP_EVENT_CLOSE:
+        printf("event type: %s", "TCP_EVENT_CLOSE");
+        break;
+    case TCP_EVENT_ABORT:
+        printf("event type: %s", "TCP_EVENT_ABORT");
+        break;
+    case TCP_EVENT_STATUS:
+        printf("event type: %s", "TCP_EVENT_STATUS");
+        break;
+    case TCP_EVENT_SEGMENT_ARRIVES:
+        printf("event type: %s", "TCP_EVENT_SEGMENT_ARRIVES");
+        break;
+    case TCP_EVENT_USER_TIMEOUT:
+        printf("event type: %s", "TCP_EVENT_USER_TIMEOUT");
+        break;
+    case TCP_EVENT_RETRANSMISSION_TIMEOUT:
+        printf("event type: %s", "TCP_EVENT_RETRANSMISSION_TIMEOUT");
+        break;
+    case TCP_EVENT_TIME_WAIT_TIMEOUT:
+        printf("event type: %s", "TCP_EVENT_TIME_WAIT_TIMEOUT");
+        break;
+    }
 }
 
 void print_hex(uint8_t *buffer, int count) {

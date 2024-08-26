@@ -14,6 +14,13 @@
 #include <sys/poll.h>
 #include <unistd.h>
 
+endpoint create_endpoint(uint32_t addr, uint16_t port) {
+    endpoint e;
+    e.addr = addr;
+    e.port = port;
+    return e;
+}
+
 int tcp_connect(tcp_connection *connection, endpoint src, endpoint dest,
                 int tun_fd) {
     printf("Connect\n");
@@ -110,34 +117,34 @@ int parse_event(tcp_connection *connection, tcp_event *event) {
         event->type = TCP_EVENT_SEGMENT_ARRIVES;
         uint8_t buf[MAX_BUF_SIZE];
         int bytes_read = read(fd, buf, MAX_BUF_SIZE);
-        ip_header *iph = (ip_header *)buf;
-        if (iph->ver != 4 || iph->proto != (uint8_t)IP_PROTO_TCP ||
-            (iph->ihl << 2) != IP_HEADER_SIZE) {
+        ip_header iph;
+        to_ip_header(&iph, buf);
+        if (iph.ver != 4 || iph.proto != (uint8_t)IP_PROTO_TCP ||
+            (iph.ihl << 2) != IP_HEADER_SIZE) {
             return -1;
         }
-        if (iph->src_addr != connection->dest.addr ||
-            iph->dest_addr != connection->src.addr) {
+        if (iph.src_addr != connection->dest.addr ||
+            iph.dest_addr != connection->src.addr) {
 
-            printf("Addr mismatch: %d %d %d %d\n", htonl(iph->src_addr),
-                   htonl(iph->dest_addr), htonl(connection->src.addr),
-                   htonl(connection->dest.addr));
-
-            return -1;
-        }
-
-        tcp_header *tcph = (tcp_header *)(buf + (iph->ihl << 2));
-
-        if (tcph->src_port != connection->dest.port ||
-            tcph->dest_port != connection->src.port) {
-
-            printf("Ports mismatch: %d %d %d %d\n", htons(tcph->src_port),
-                   htons(tcph->dest_port), htons(connection->src.port),
-                   htons(connection->dest.port));
+            printf("Addr mismatch: %d %d %d %d\n", iph.src_addr, iph.dest_addr,
+                   connection->src.addr, connection->dest.addr);
 
             return -1;
         }
-        event->len = ntohs(iph->len) - (iph->ihl << 2);
-        memcpy(event->data, tcph, event->len);
+
+        tcp_header tcph;
+        to_tcp_header(&tcph, buf + (iph.ihl << 2));
+
+        if (tcph.src_port != connection->dest.port ||
+            tcph.dest_port != connection->src.port) {
+
+            printf("Ports mismatch: %d %d %d %d\n", tcph.src_port,
+                   tcph.dest_port, connection->src.port, connection->dest.port);
+
+            return -1;
+        }
+        event->len = iph.len - (iph.ihl << 2);
+        memcpy(event->data, &tcph, event->len);
         break;
     case TCP_FD_READ:
         printf("TCP_FD_READ\n");
@@ -165,21 +172,21 @@ int tcp_loop(tcp_connection *connection) {
             printf("Poll errored\n");
             return -1;
         }
+        for (int i = 0; i < 3; i++) {
+            printf("fd %d: revents: %hu pollin: %hu\n", i,
+                   connection->in_r_fds[i].revents,
+                   connection->in_r_fds[i].revents & POLLIN);
+        }
+
         printf("Polled: %d\n", ready);
 
         tcp_event *event;
-        printf("allocced size: %lu\n", MAX_BUF_SIZE + sizeof(tcp_event));
         event = malloc(MAX_BUF_SIZE + sizeof(tcp_event));
 
         if (parse_event(connection, event) == -1) {
-            printf("event not parsed\n");
             sleep(1);
             continue;
         }
-
-        printf("parsed event\n");
-
-        printf("event type: %d\n", event->type);
 
         if (event->type == TCP_EVENT_ABORT) {
             break;
@@ -207,19 +214,25 @@ int tcp_create_connection(tcp_connection *connection, int dev_fd, endpoint src,
         printf("Pipe input failed\n");
     }
 
-    connection->in_r_fds[TCP_FD_READ].fd = input[0];
-    connection->in_r_fds[TCP_FD_READ].events = POLLIN;
-
     connection->in_r_fds[TCP_FD_DEV].fd = dev_fd;
-    connection->in_r_fds[TCP_FD_DEV].events = POLLIN;
+    connection->in_r_fds[TCP_FD_READ].fd = input[0];
 
     connection->in_w_fds[TCP_FD_DEV] = dev_fd;
     connection->in_w_fds[TCP_FD_READ] = output[1];
 
     connection->ex_r_fds[0].fd = output[0];
-    connection->ex_r_fds[0].events = POLLIN;
 
     connection->ex_w_fds[0] = input[1];
+
+    for (int i = 0; i < sizeof(connection->in_r_fds) / sizeof(struct pollfd);
+         i++) {
+        connection->in_r_fds[i].events = POLLIN;
+    }
+
+    for (int i = 0; i < sizeof(connection->ex_r_fds) / sizeof(struct pollfd);
+         i++) {
+        connection->ex_r_fds[i].events = POLLIN;
+    }
 
     connection->src = src;
     connection->dest = dest;
@@ -236,14 +249,13 @@ int tcp_transmit_dev(tcp_connection *connection, tcp_header *tcph,
         create_ip_header(connection->src.addr, connection->dest.addr,
                          (tcph->doff << 2) + payload_len + IP_HEADER_SIZE);
     tcp_ip_header piph;
-    piph.tcp_len = htons(ntohs(iph.len) - IP_HEADER_SIZE);
+    piph.tcp_len = iph.len - IP_HEADER_SIZE;
     piph.src_addr = iph.src_addr;
     piph.dest_addr = iph.dest_addr;
-    piph.protocol = htons((uint16_t)IP_PROTO_TCP);
+    piph.protocol = (uint16_t)IP_PROTO_TCP;
 
-    tcph->check = tcp_checksum(&piph, tcph, payload);
     int offset = from_ip_header(&iph, buf);
-    offset += from_tcp_header(tcph, buf + offset);
+    offset += from_tcp_header(tcph, &piph, payload, buf + offset);
     memcpy(buf + offset, payload, payload_len);
 
     write(dev_fd, buf, offset + payload_len);
@@ -279,7 +291,7 @@ int tcp_create_tcb(tcp_tcb_snd *snd, tcp_tcb_rcv *rcv) {
 int tcp_send_rst(tcp_connection *connection) {
     tcp_header tcph =
         create_tcp_header(connection->src.port, connection->dest.port);
-    tcph.seq = htonl(connection->snd.iss);
+    tcph.seq = connection->snd.iss;
     tcph.flags = 0 & TCP_FLAG_RST;
 
     tcp_transmit_dev(connection, &tcph, NULL, 0);
@@ -293,7 +305,7 @@ int tcp_state_closed(tcp_connection *connection) {
     tcp_create_tcb(&connection->snd, &connection->rcv);
     tcp_header tcph =
         create_tcp_header(connection->src.port, connection->dest.port);
-    tcph.seq = htonl(connection->snd.iss);
+    tcph.seq = connection->snd.iss;
     tcph.flags |= TCP_FLAG_SYN;
 
     uint8_t dummy;
@@ -310,19 +322,19 @@ int tcp_state_closed(tcp_connection *connection) {
 int tcp_state_syn_sent(tcp_connection *connection, tcp_event *event) {
     printf("Syn sent state\n");
     switch (event->type) {
-    case TCP_EVENT_SEGMENT_ARRIVES:
+    case TCP_EVENT_SEGMENT_ARRIVES: {
         tcp_header *tcph = (tcp_header *)event->data;
         print_tcp_header(tcph);
         if (tcph->flags & TCP_FLAG_ACK) {
-            if (wrapping_lt(ntohl(tcph->seq_ack), connection->snd.iss - 1) ||
-                wrapping_lt(connection->snd.nxt, ntohl(tcph->seq_ack))) {
+            if (wrapping_lt(tcph->seq_ack, connection->snd.iss - 1) ||
+                wrapping_lt(connection->snd.nxt, tcph->seq_ack)) {
                 printf("Ack not acceptable\n");
                 if (!(tcph->flags & TCP_FLAG_RST)) {
                     tcp_send_rst(connection);
                 }
                 break;
             }
-            if (!wrapping_between(connection->snd.una - 1, ntohl(tcph->seq_ack),
+            if (!wrapping_between(connection->snd.una - 1, tcph->seq_ack,
                                   connection->snd.nxt + 1)) {
                 printf("Ack not acceptable\n");
                 break;
@@ -335,9 +347,9 @@ int tcp_state_syn_sent(tcp_connection *connection, tcp_event *event) {
         }
 
         if (tcph->flags & TCP_FLAG_SYN) {
-            connection->rcv.nxt = ntohl(tcph->seq) + 1;
-            connection->rcv.irs = ntohl(tcph->seq);
-            connection->snd.una = ntohl(tcph->seq_ack);
+            connection->rcv.nxt = tcph->seq + 1;
+            connection->rcv.irs = tcph->seq;
+            connection->snd.una = tcph->seq_ack;
             // Remove appropriate retransmission segments
 
             if (wrapping_lt(connection->snd.iss, connection->snd.una)) {
@@ -345,8 +357,8 @@ int tcp_state_syn_sent(tcp_connection *connection, tcp_event *event) {
                 connection->state_func = tcp_state_established;
                 tcp_header new_tcph = create_tcp_header(connection->src.port,
                                                         connection->dest.port);
-                new_tcph.seq = htonl(connection->snd.nxt);
-                new_tcph.seq_ack = htonl(connection->rcv.nxt);
+                new_tcph.seq = connection->snd.nxt;
+                new_tcph.seq_ack = connection->rcv.nxt;
                 new_tcph.flags |= TCP_FLAG_ACK;
                 tcp_transmit_dev(connection, &new_tcph, NULL, 0);
                 break;
@@ -355,13 +367,13 @@ int tcp_state_syn_sent(tcp_connection *connection, tcp_event *event) {
                 connection->state_func = tcp_state_syn_received;
                 tcp_header new_tcph = create_tcp_header(connection->src.port,
                                                         connection->dest.port);
-                new_tcph.seq = htonl(connection->snd.iss);
-                new_tcph.seq_ack = htonl(connection->rcv.nxt);
+                new_tcph.seq = connection->snd.iss;
+                new_tcph.seq_ack = connection->rcv.nxt;
                 tcp_transmit_dev(connection, &new_tcph, NULL, 0);
                 break;
             }
         }
-        break;
+    } break;
     case TCP_EVENT_CLOSE:
         connection->state = TCP_CLOSED;
         break;

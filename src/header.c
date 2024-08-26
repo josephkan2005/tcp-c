@@ -54,7 +54,7 @@ tcp_header create_tcp_header(uint16_t src_port, uint16_t dest_port) {
     tcph.doff = 5;
     tcph.res = 0;
     tcph.flags = 0;
-    tcph.wnd = htons(1024);
+    tcph.wnd = 1024;
 
     tcph.check = 0;
     tcph.urg_ptr = 0;
@@ -64,13 +64,53 @@ tcp_header create_tcp_header(uint16_t src_port, uint16_t dest_port) {
 
 int to_tcp_header(tcp_header *header, uint8_t *buffer) {
     memcpy(header, buffer, TCP_HEADER_SIZE);
+
+    convert_tcp_header_he(header);
+
     tcp_read_options(header, buffer + TCP_HEADER_SIZE);
     return header->doff << 2;
 }
 
-int from_tcp_header(tcp_header *header, uint8_t *buffer) {
-    memcpy(buffer, header, header->doff << 2);
+int from_tcp_header(tcp_header *header, tcp_ip_header *ip_header,
+                    uint8_t *payload, uint8_t *buffer) {
+    tcp_header tcph_ne;
+    tcp_ip_header piph_ne;
+    memcpy(&tcph_ne, header, header->doff << 2);
+    memcpy(&piph_ne, ip_header, TCP_IP_HEADER_SIZE);
+
+    convert_tcp_header_ne(&tcph_ne);
+    convert_tcp_ip_header_ne(&piph_ne);
+
+    tcp_checksum(&piph_ne, &tcph_ne, payload);
+
+    memcpy(buffer, &tcph_ne, header->doff << 2);
     return header->doff << 2;
+}
+
+int convert_tcp_header_he(tcp_header *header) {
+    header->src_port = ntohs(header->src_port);
+    header->dest_port = ntohs(header->dest_port);
+
+    header->seq = ntohl(header->seq);
+    header->seq_ack = ntohl(header->seq_ack);
+
+    header->wnd = ntohs(header->wnd);
+    header->urg_ptr = ntohs(header->urg_ptr);
+    return 0;
+}
+
+int convert_tcp_header_ne(tcp_header *header) {
+
+    header->src_port = htons(header->src_port);
+    header->dest_port = htons(header->dest_port);
+
+    header->seq = htonl(header->seq);
+    header->seq_ack = htonl(header->seq_ack);
+
+    header->wnd = htons(header->wnd);
+    header->urg_ptr = htons(header->urg_ptr);
+
+    return 0;
 }
 
 ip_header create_ip_header(uint32_t src_addr, uint32_t dest_addr,
@@ -80,7 +120,7 @@ ip_header create_ip_header(uint32_t src_addr, uint32_t dest_addr,
     iph.ver = 4;
     iph.ihl = 5;
     iph.tos = 0;
-    iph.len = htons(data_len);
+    iph.len = data_len;
     iph.id = 0;
     iph.frag = 0;
     iph.ttl = 10;
@@ -93,16 +133,50 @@ ip_header create_ip_header(uint32_t src_addr, uint32_t dest_addr,
 }
 
 int to_ip_header(ip_header *header, uint8_t *buffer) {
-    // *header = *(ip_header *)buffer;
     memcpy(header, buffer, IP_HEADER_SIZE);
+    convert_ip_header_he(header);
+
     return IP_HEADER_SIZE;
 }
 
 int from_ip_header(ip_header *header, uint8_t *buffer) {
-    ip_checksum(header);
-
-    memcpy(buffer, header, IP_HEADER_SIZE);
+    ip_header iph_ne;
+    memcpy(&iph_ne, header, IP_HEADER_SIZE);
+    convert_ip_header_ne(&iph_ne);
+    ip_checksum(&iph_ne);
+    memcpy(buffer, &iph_ne, IP_HEADER_SIZE);
     return IP_HEADER_SIZE;
+}
+
+int convert_ip_header_ne(ip_header *header) {
+
+    header->src_addr = htonl(header->src_addr);
+    header->dest_addr = htonl(header->dest_addr);
+
+    header->len = htons(header->len);
+    header->frag = htons(header->frag);
+    header->id = htons(header->id);
+
+    return 0;
+}
+
+int convert_ip_header_he(ip_header *header) {
+    header->src_addr = ntohl(header->src_addr);
+    header->dest_addr = ntohl(header->dest_addr);
+
+    header->len = ntohs(header->len);
+    header->frag = ntohs(header->frag);
+    header->id = ntohs(header->id);
+
+    return 0;
+}
+
+int convert_tcp_ip_header_ne(tcp_ip_header *header) {
+    header->src_addr = htonl(header->src_addr);
+    header->dest_addr = htonl(header->dest_addr);
+    header->protocol = htons(header->protocol);
+    header->tcp_len = htons(header->tcp_len);
+    return 0;
 }
 
 uint16_t checksum(uint16_t *payload, uint32_t count, uint32_t start) {

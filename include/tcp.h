@@ -81,6 +81,8 @@ typedef struct tcp_connection {
     endpoint dest;
 } tcp_connection;
 
+endpoint create_endpoint(uint32_t addr, uint16_t port);
+
 int tcp_connect(tcp_connection *connection, endpoint src, endpoint dest,
                 int tun_fd);
 
