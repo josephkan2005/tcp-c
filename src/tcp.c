@@ -184,18 +184,24 @@ int tcp_loop(tcp_connection *connection) {
         event = malloc(MAX_BUF_SIZE + sizeof(tcp_event));
 
         if (parse_event(connection, event) == -1) {
+            free(event);
             sleep(1);
             continue;
         }
 
         if (event->type == TCP_EVENT_ABORT) {
+            free(event);
             break;
         }
 
-        connection->state_func(connection, event);
-        if (connection->state == TCP_CLOSED) {
-            break;
-        }
+        int res = 0;
+        do {
+            res = connection->state_func(connection, event);
+            if (connection->state == TCP_CLOSED) {
+                free(event);
+                break;
+            }
+        } while (res == 1);
         free(event);
         sleep(1);
     }
@@ -262,15 +268,6 @@ int tcp_transmit_dev(tcp_connection *connection, tcp_header *tcph,
     return 0;
 }
 
-int tcp_check_valid(tcp_connection *connection, tcp_header *tcph) {
-    if (!wrapping_between(connection->rcv.nxt, tcph->seq,
-                          connection->rcv.nxt + connection->rcv.wnd)) {
-        return 0;
-    }
-
-    return 1;
-}
-
 int tcp_create_tcb(tcp_tcb_snd *snd, tcp_tcb_rcv *rcv) {
     snd->iss = 0;
     snd->nxt = snd->iss + 1;
@@ -296,6 +293,29 @@ int tcp_send_rst(tcp_connection *connection) {
 
     tcp_transmit_dev(connection, &tcph, NULL, 0);
     return 0;
+}
+
+int tcp_check_acceptability(tcp_connection *connection, tcp_header *tcph,
+                            uint16_t payload_len) {
+    int acceptable = 1;
+    if (connection->rcv.wnd == 0) {
+        acceptable = payload_len == 0;
+    } else {
+        if (payload_len == 0) {
+            acceptable =
+                wrapping_between(connection->rcv.nxt - 1, tcph->seq,
+                                 connection->rcv.nxt + connection->rcv.wnd);
+        } else {
+            acceptable =
+                wrapping_between(connection->rcv.nxt - 1, tcph->seq,
+                                 connection->rcv.nxt + connection->rcv.wnd) ||
+                wrapping_between(connection->rcv.nxt - 1,
+                                 tcph->seq + payload_len - 1,
+                                 connection->rcv.nxt + connection->rcv.wnd);
+        }
+    }
+
+    return acceptable;
 }
 
 int tcp_state_closed(tcp_connection *connection) {
@@ -390,6 +410,102 @@ int tcp_state_syn_received(tcp_connection *connection, tcp_event *event) {
 
 int tcp_state_established(tcp_connection *connection, tcp_event *event) {
     printf("Established state\n");
+    switch (event->type) {
+    case TCP_EVENT_SEGMENT_ARRIVES: {
+        tcp_header *tcph = (tcp_header *)event->data;
+        int payload_len = event->len - (tcph->doff << 2);
+        int acceptable = tcp_check_acceptability(connection, tcph, payload_len);
+        if (!acceptable) {
+            if (tcph->flags & TCP_FLAG_RST) {
+                break;
+            }
+            tcp_header new_tcph =
+                create_tcp_header(connection->src.port, connection->dest.port);
+            new_tcph.seq = connection->snd.nxt;
+            new_tcph.seq_ack = connection->rcv.nxt;
+            new_tcph.flags |= TCP_FLAG_ACK;
+            tcp_transmit_dev(connection, &new_tcph, NULL, 0);
+            break;
+        }
+        if (tcph->flags & TCP_FLAG_RST) {
+            connection->state = TCP_CLOSED;
+            break;
+        }
+        if (tcph->flags & TCP_FLAG_SYN) {
+            tcp_send_rst(connection);
+            break;
+        }
+        if (tcph->flags & TCP_FLAG_ACK) {
+            if (wrapping_between(connection->snd.una, tcph->seq_ack,
+                                 connection->snd.nxt + 1)) {
+                connection->snd.una = tcph->seq_ack;
+                // dump segments before una in retransmission queue
+
+                if (wrapping_lt(connection->snd.wl1, tcph->seq) ||
+                    (connection->snd.wl1 == tcph->seq &&
+                     wrapping_lt(connection->snd.wl2, tcph->seq_ack))) {
+                    connection->snd.wnd = tcph->wnd;
+                    connection->snd.wl1 = tcph->seq;
+                    connection->snd.wl2 = tcph->seq_ack;
+                }
+            } else if (wrapping_lt(tcph->seq_ack, connection->snd.una)) {
+                break;
+            } else if (wrapping_lt(connection->snd.nxt, tcph->seq_ack)) {
+                tcp_header new_tcph = create_tcp_header(connection->src.port,
+                                                        connection->dest.port);
+                new_tcph.seq = connection->snd.nxt;
+                new_tcph.seq_ack = tcph->seq + 1;
+                new_tcph.flags |= TCP_FLAG_ACK;
+                tcp_transmit_dev(connection, &new_tcph, NULL, 0);
+                break;
+            }
+        }
+        if (tcph->flags & TCP_FLAG_URG) {
+            connection->rcv.up = connection->rcv.up > tcph->urg_ptr
+                                     ? connection->rcv.up
+                                     : tcph->urg_ptr;
+        }
+        if (payload_len > 0) {
+            tcp_header new_tcph =
+                create_tcp_header(connection->src.port, connection->dest.port);
+            connection->rcv.nxt = tcph->seq + payload_len;
+            // write data to local buffers
+            new_tcph.seq = connection->snd.nxt;
+            new_tcph.seq_ack = connection->rcv.nxt;
+            new_tcph.flags |= TCP_FLAG_ACK;
+            tcp_transmit_dev(connection, &new_tcph, NULL, 0);
+        }
+        if (tcph->flags & TCP_FLAG_FIN) {
+            // signal user closing
+            connection->rcv.nxt = tcph->seq + payload_len + 1;
+            tcp_header new_tcph =
+                create_tcp_header(connection->src.port, connection->dest.port);
+            new_tcph.seq = connection->snd.nxt;
+            new_tcph.seq_ack = connection->rcv.nxt;
+            new_tcph.flags |= TCP_FLAG_ACK;
+            tcp_transmit_dev(connection, &new_tcph, NULL, 0);
+            connection->state = TCP_CLOSE_WAIT;
+            connection->state_func = tcp_state_close_wait;
+        }
+
+    } break;
+    case TCP_EVENT_OPEN:
+    case TCP_EVENT_SEND:
+    case TCP_EVENT_RECEIVE:
+    case TCP_EVENT_CLOSE:
+    case TCP_EVENT_ABORT:
+    case TCP_EVENT_STATUS:
+    case TCP_EVENT_USER_TIMEOUT:
+    case TCP_EVENT_RETRANSMISSION_TIMEOUT:
+    case TCP_EVENT_TIME_WAIT_TIMEOUT:
+        break;
+    }
+
+    return 0;
+}
+
+int tcp_state_close_wait(tcp_connection *connection, tcp_event *event) {
+    printf("Close wait state\n");
 
     return 0;
 }

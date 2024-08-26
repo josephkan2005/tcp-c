@@ -40,7 +40,7 @@ enum tcp_event_type {
 
 typedef struct tcp_event {
     enum tcp_event_type type;
-    uint32_t len;
+    uint16_t len;
     uint8_t data[];
 } tcp_event;
 
@@ -111,9 +111,11 @@ int tcp_create_tcb(tcp_tcb_snd *snd, tcp_tcb_rcv *rcv);
 
 int tcp_loop(tcp_connection *connection);
 
-int tcp_check_valid(tcp_connection *connection, tcp_header *tcph);
+int tcp_check_acceptability(tcp_connection *connection, tcp_header *tcph,
+                            uint16_t payload_len);
 
 int tcp_state_closed(tcp_connection *connection);
 int tcp_state_syn_received(tcp_connection *connection, tcp_event *event);
 int tcp_state_syn_sent(tcp_connection *connection, tcp_event *event);
 int tcp_state_established(tcp_connection *connection, tcp_event *event);
+int tcp_state_close_wait(tcp_connection *connection, tcp_event *event);
