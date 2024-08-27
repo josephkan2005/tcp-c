@@ -40,7 +40,7 @@ enum tcp_event_type {
 
 typedef struct tcp_event {
     enum tcp_event_type type;
-    uint16_t len;
+    uint32_t len;
     uint8_t data[];
 } tcp_event;
 
@@ -83,10 +83,12 @@ typedef struct tcp_connection {
 
 endpoint create_endpoint(uint32_t addr, uint16_t port);
 
+tcp_header create_tcp_header_from_connection(tcp_connection *connection);
+
 int tcp_connect(tcp_connection *connection, endpoint src, endpoint dest,
                 int tun_fd);
 
-int tcp_write(tcp_connection *connection, uint8_t *buf, int len);
+int tcp_write(tcp_connection *connection, uint8_t *buf, uint16_t len);
 
 int tcp_read(tcp_connection *connection, uint8_t *buf, int len);
 

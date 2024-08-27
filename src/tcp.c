@@ -34,12 +34,18 @@ int tcp_connect(tcp_connection *connection, endpoint src, endpoint dest,
     return 0;
 }
 
-int tcp_write(tcp_connection *connection, uint8_t *buf, int len) {
+int tcp_write(tcp_connection *connection, uint8_t *buf, uint16_t len) {
     if (connection->state == TCP_CLOSED)
         return -1;
     printf("Write\n");
     int fd = connection->ex_w_fds[0];
-    int res = write(fd, buf, len);
+    uint8_t event_buf[MAX_BUF_SIZE + 8];
+    tcp_event *event = (tcp_event *)event_buf;
+    event->type = TCP_EVENT_SEND;
+    event->len = len;
+    memcpy(event->data, buf, len);
+    print_hex(event_buf, len + 8);
+    int res = write(fd, event_buf, len + 8);
     if (res < 0) {
         printf("Write failed\n");
         return -1;
@@ -148,7 +154,7 @@ int parse_event(tcp_connection *connection, tcp_event *event) {
         break;
     case TCP_FD_READ:
         printf("TCP_FD_READ\n");
-        read(fd, &event->type, 1);
+        read(fd, &event->type, 4);
         read(fd, &event->len, 4);
         read(fd, &event->data, event->len);
         break;
@@ -177,6 +183,9 @@ int tcp_loop(tcp_connection *connection) {
                    connection->in_r_fds[i].revents,
                    connection->in_r_fds[i].events,
                    connection->in_r_fds[i].revents & POLLIN);
+            if (connection->in_r_fds[i].revents & POLLHUP) {
+                printf("Hang up\n");
+            }
         }
 
         printf("Polled: %d\n", ready);
@@ -186,13 +195,12 @@ int tcp_loop(tcp_connection *connection) {
 
         if (parse_event(connection, event) == -1) {
             free(event);
-            sleep(1);
             continue;
         }
 
         if (event->type == TCP_EVENT_ABORT) {
             free(event);
-            break;
+            return 0;
         }
 
         int res = 0;
@@ -200,11 +208,11 @@ int tcp_loop(tcp_connection *connection) {
             res = connection->state_func(connection, event);
             if (connection->state == TCP_CLOSED) {
                 free(event);
-                break;
+                printf("Close & return\n");
+                return 0;
             }
         } while (res == 1);
         free(event);
-        sleep(1);
     }
     return 0;
 }
@@ -287,8 +295,7 @@ int tcp_create_tcb(tcp_tcb_snd *snd, tcp_tcb_rcv *rcv) {
 }
 
 int tcp_send_rst(tcp_connection *connection) {
-    tcp_header tcph =
-        create_tcp_header(connection->src.port, connection->dest.port);
+    tcp_header tcph = create_tcp_header_from_connection(connection);
     tcph.seq = connection->snd.iss;
     tcph.flags = 0 & TCP_FLAG_RST;
 
@@ -324,8 +331,7 @@ int tcp_state_closed(tcp_connection *connection) {
     //
     // Only support active, always send SYN
     tcp_create_tcb(&connection->snd, &connection->rcv);
-    tcp_header tcph =
-        create_tcp_header(connection->src.port, connection->dest.port);
+    tcp_header tcph = create_tcp_header_from_connection(connection);
     tcph.seq = connection->snd.iss;
     tcph.flags |= TCP_FLAG_SYN;
 
@@ -335,7 +341,6 @@ int tcp_state_closed(tcp_connection *connection) {
 
     connection->state = TCP_SYN_SENT;
     connection->state_func = tcp_state_syn_sent;
-    printf("State func: %p\n", connection->state_func);
 
     return 0;
 }
@@ -376,8 +381,8 @@ int tcp_state_syn_sent(tcp_connection *connection, tcp_event *event) {
             if (wrapping_lt(connection->snd.iss, connection->snd.una)) {
                 connection->state = TCP_ESTABLISHED;
                 connection->state_func = tcp_state_established;
-                tcp_header new_tcph = create_tcp_header(connection->src.port,
-                                                        connection->dest.port);
+                tcp_header new_tcph =
+                    create_tcp_header_from_connection(connection);
                 new_tcph.seq = connection->snd.nxt;
                 new_tcph.seq_ack = connection->rcv.nxt;
                 new_tcph.flags |= TCP_FLAG_ACK;
@@ -386,8 +391,8 @@ int tcp_state_syn_sent(tcp_connection *connection, tcp_event *event) {
             } else {
                 connection->state = TCP_SYN_RECEIVED;
                 connection->state_func = tcp_state_syn_received;
-                tcp_header new_tcph = create_tcp_header(connection->src.port,
-                                                        connection->dest.port);
+                tcp_header new_tcph =
+                    create_tcp_header_from_connection(connection);
                 new_tcph.seq = connection->snd.iss;
                 new_tcph.seq_ack = connection->rcv.nxt;
                 tcp_transmit_dev(connection, &new_tcph, NULL, 0);
@@ -420,8 +425,7 @@ int tcp_state_established(tcp_connection *connection, tcp_event *event) {
             if (tcph->flags & TCP_FLAG_RST) {
                 break;
             }
-            tcp_header new_tcph =
-                create_tcp_header(connection->src.port, connection->dest.port);
+            tcp_header new_tcph = create_tcp_header_from_connection(connection);
             new_tcph.seq = connection->snd.nxt;
             new_tcph.seq_ack = connection->rcv.nxt;
             new_tcph.flags |= TCP_FLAG_ACK;
@@ -452,8 +456,8 @@ int tcp_state_established(tcp_connection *connection, tcp_event *event) {
             } else if (wrapping_lt(tcph->seq_ack, connection->snd.una)) {
                 break;
             } else if (wrapping_lt(connection->snd.nxt, tcph->seq_ack)) {
-                tcp_header new_tcph = create_tcp_header(connection->src.port,
-                                                        connection->dest.port);
+                tcp_header new_tcph =
+                    create_tcp_header_from_connection(connection);
                 new_tcph.seq = connection->snd.nxt;
                 new_tcph.seq_ack = tcph->seq + 1;
                 new_tcph.flags |= TCP_FLAG_ACK;
@@ -467,8 +471,7 @@ int tcp_state_established(tcp_connection *connection, tcp_event *event) {
                                      : tcph->urg_ptr;
         }
         if (payload_len > 0) {
-            tcp_header new_tcph =
-                create_tcp_header(connection->src.port, connection->dest.port);
+            tcp_header new_tcph = create_tcp_header_from_connection(connection);
             connection->rcv.nxt = tcph->seq + payload_len;
             // write data to local buffers
             new_tcph.seq = connection->snd.nxt;
@@ -479,8 +482,7 @@ int tcp_state_established(tcp_connection *connection, tcp_event *event) {
         if (tcph->flags & TCP_FLAG_FIN) {
             // signal user closing
             connection->rcv.nxt = tcph->seq + payload_len + 1;
-            tcp_header new_tcph =
-                create_tcp_header(connection->src.port, connection->dest.port);
+            tcp_header new_tcph = create_tcp_header_from_connection(connection);
             new_tcph.seq = connection->snd.nxt;
             new_tcph.seq_ack = connection->rcv.nxt;
             new_tcph.flags |= TCP_FLAG_ACK;
@@ -492,7 +494,14 @@ int tcp_state_established(tcp_connection *connection, tcp_event *event) {
 
     } break;
     case TCP_EVENT_OPEN:
-    case TCP_EVENT_SEND:
+    case TCP_EVENT_SEND: {
+        uint32_t len = event->len;
+        uint8_t *payload = event->data;
+        tcp_header new_tcph = create_tcp_header_from_connection(connection);
+        new_tcph.seq = connection->snd.nxt;
+
+        tcp_transmit_dev(connection, &new_tcph, payload, len);
+    } break;
     case TCP_EVENT_RECEIVE:
     case TCP_EVENT_CLOSE:
     case TCP_EVENT_ABORT:
@@ -508,8 +517,7 @@ int tcp_state_established(tcp_connection *connection, tcp_event *event) {
 
 int tcp_state_close_wait(tcp_connection *connection, tcp_event *event) {
     printf("Close wait state\n");
-    tcp_header new_tcph =
-        create_tcp_header(connection->src.port, connection->dest.port);
+    tcp_header new_tcph = create_tcp_header_from_connection(connection);
     new_tcph.seq = connection->snd.nxt;
     new_tcph.seq_ack = connection->rcv.nxt;
     new_tcph.flags |= TCP_FLAG_ACK;
@@ -548,4 +556,8 @@ int tcp_state_last_ack(tcp_connection *connection, tcp_event *event) {
         break;
     }
     return 0;
+}
+
+tcp_header create_tcp_header_from_connection(tcp_connection *connection) {
+    return create_tcp_header(connection->src.port, connection->dest.port);
 }

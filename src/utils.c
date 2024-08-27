@@ -53,34 +53,34 @@ void print_tcp_tcb(tcp_tcb_snd *snd, tcp_tcb_rcv *rcv) {
 void print_tcp_event_type(enum tcp_event_type type) {
     switch (type) {
     case TCP_EVENT_OPEN:
-        printf("event type: %s", "TCP_EVENT_OPEN");
+        printf("event type: %s", "TCP_EVENT_OPEN\n");
         break;
     case TCP_EVENT_SEND:
-        printf("event type: %s", "TCP_EVENT_SEND");
+        printf("event type: %s", "TCP_EVENT_SEND\n");
         break;
     case TCP_EVENT_RECEIVE:
-        printf("event type: %s", "TCP_EVENT_RECEIVE");
+        printf("event type: %s", "TCP_EVENT_RECEIVE\n");
         break;
     case TCP_EVENT_CLOSE:
-        printf("event type: %s", "TCP_EVENT_CLOSE");
+        printf("event type: %s", "TCP_EVENT_CLOSE\n");
         break;
     case TCP_EVENT_ABORT:
-        printf("event type: %s", "TCP_EVENT_ABORT");
+        printf("event type: %s", "TCP_EVENT_ABORT\n");
         break;
     case TCP_EVENT_STATUS:
-        printf("event type: %s", "TCP_EVENT_STATUS");
+        printf("event type: %s", "TCP_EVENT_STATUS\n");
         break;
     case TCP_EVENT_SEGMENT_ARRIVES:
-        printf("event type: %s", "TCP_EVENT_SEGMENT_ARRIVES");
+        printf("event type: %s", "TCP_EVENT_SEGMENT_ARRIVES\n");
         break;
     case TCP_EVENT_USER_TIMEOUT:
-        printf("event type: %s", "TCP_EVENT_USER_TIMEOUT");
+        printf("event type: %s", "TCP_EVENT_USER_TIMEOUT\n");
         break;
     case TCP_EVENT_RETRANSMISSION_TIMEOUT:
-        printf("event type: %s", "TCP_EVENT_RETRANSMISSION_TIMEOUT");
+        printf("event type: %s", "TCP_EVENT_RETRANSMISSION_TIMEOUT\n");
         break;
     case TCP_EVENT_TIME_WAIT_TIMEOUT:
-        printf("event type: %s", "TCP_EVENT_TIME_WAIT_TIMEOUT");
+        printf("event type: %s", "TCP_EVENT_TIME_WAIT_TIMEOUT\n");
         break;
     }
 }

@@ -1,6 +1,5 @@
 #include "header.h"
 #include "tcp.h"
-#include <stdint.h>
 
 void print_tcp_header(tcp_header *tcph);
 

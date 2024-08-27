@@ -68,6 +68,8 @@ int main(int argc, char **argv) {
     src = create_endpoint(0xc0a80003, 8000);
     dest = create_endpoint(0xc0a80001, 9002);
     tcp_connect(&connection, src, dest, tun_fd);
+    char *data = "Hello";
+    tcp_write(&connection, data, 6);
 
     /* uint32_t buf = 0x00110011;
     tcp_write(&connection, (uint8_t *)&buf, 4); */
