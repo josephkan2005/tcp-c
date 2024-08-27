@@ -10,17 +10,16 @@ typedef struct transmission_queue {
 
 } transmission_queue;
 
-int transmission_queue_create(transmission_queue *dq, uint32_t cap);
+int transmission_queue_create(transmission_queue *tq, uint32_t cap);
 
-int transmission_queue_front(transmission_queue *dq, uint8_t *buf,
+int transmission_queue_front(transmission_queue *tq, uint8_t *buf,
                              uint32_t len);
 
-int transmission_queue_push_back(transmission_queue *dq, uint8_t *buf,
-                                 uint32_t seq, uint32_t len);
-
-int transmission_queue_pop_front(transmission_queue *dq, uint32_t seq,
+int transmission_queue_push_back(transmission_queue *tq, uint8_t *buf,
                                  uint32_t len);
 
-int transmission_queue_realloc(transmission_queue *dq);
+int transmission_queue_pop_front(transmission_queue *tq, uint32_t ack);
 
-int transmission_queue_destroy(transmission_queue *dq);
+int transmission_queue_realloc(transmission_queue *tq);
+
+int transmission_queue_destroy(transmission_queue *tq);

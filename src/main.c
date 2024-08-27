@@ -65,8 +65,8 @@ int main(int argc, char **argv) {
 
     tcp_connection connection;
     endpoint src, dest;
-    src = create_endpoint(0xc0a80003, 8000);
-    dest = create_endpoint(0xc0a80001, 9002);
+    src = create_endpoint("192.168.0.3", 8000);
+    dest = create_endpoint("192.168.0.1", 9006);
     tcp_connect(&connection, src, dest, tun_fd);
     char *data = "Hello";
     tcp_write(&connection, data, 6);
@@ -74,7 +74,12 @@ int main(int argc, char **argv) {
     /* uint32_t buf = 0x00110011;
     tcp_write(&connection, (uint8_t *)&buf, 4); */
 
+    uint8_t buf[MAX_BUF_SIZE];
     while (1) {
+        memset(buf, 0, MAX_BUF_SIZE);
+        int nbytes = tcp_read(&connection, buf, MAX_BUF_SIZE);
+        printf("Reading: %s end\n", buf);
+        print_hex(buf, nbytes);
         /* int nread = read(tun_fd, buffer, sizeof(buffer));
         if (nread < 0) {
             perror("Reading from interface");

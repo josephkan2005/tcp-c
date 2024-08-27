@@ -1,6 +1,7 @@
 #include "tcp.h"
 #include "header.h"
 #include "utils.h"
+#include <arpa/inet.h>
 #include <fcntl.h>
 #include <linux/if_tun.h>
 #include <net/if.h>
@@ -12,11 +13,17 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/poll.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
-endpoint create_endpoint(uint32_t addr, uint16_t port) {
+endpoint create_endpoint(char *addr, uint16_t port) {
     endpoint e;
-    e.addr = addr;
+    int res = inet_pton(AF_INET, addr, &e.addr);
+    if (res != 1) {
+        printf("Address format could not be parsed\n");
+        return e;
+    }
+    e.addr = ntohl(e.addr);
     e.port = port;
     return e;
 }
@@ -39,12 +46,11 @@ int tcp_write(tcp_connection *connection, uint8_t *buf, uint16_t len) {
         return -1;
     printf("Write\n");
     int fd = connection->ex_w_fds[0];
-    uint8_t event_buf[MAX_BUF_SIZE + 8];
+    uint8_t event_buf[MAX_BUF_SIZE + 12];
     tcp_event *event = (tcp_event *)event_buf;
     event->type = TCP_EVENT_SEND;
     event->len = len;
-    memcpy(event->data, buf, len);
-    print_hex(event_buf, len + 8);
+    memcpy(event_buf + 8, buf, len);
     int res = write(fd, event_buf, len + 8);
     if (res < 0) {
         printf("Write failed\n");
@@ -57,12 +63,13 @@ int tcp_write(tcp_connection *connection, uint8_t *buf, uint16_t len) {
 int tcp_read(tcp_connection *connection, uint8_t *buf, int nbytes) {
     if (connection->state == TCP_CLOSED)
         return -1;
-    printf("Read\n");
     int ready = poll(connection->ex_r_fds, 1, -1);
     if (ready == -1) {
         printf("Poll timed out");
         return -1;
     }
+
+    printf("Read\n");
 
     int num_read = read(connection->ex_r_fds[0].fd, buf, nbytes);
 
@@ -91,7 +98,7 @@ int tcp_receive() {
     return 0;
 }
 
-int tcp_close() {
+int tcp_close(tcp_connection *connection) {
     printf("Close\n");
     return 0;
 }
@@ -150,13 +157,18 @@ int parse_event(tcp_connection *connection, tcp_event *event) {
             return -1;
         }
         event->len = iph.len - (iph.ihl << 2);
-        memcpy(event->data, &tcph, event->len);
+        event->data = malloc(event->len);
+        memcpy(event->data, &tcph, tcph.doff << 2);
+        memcpy(event->data + (tcph.doff << 2),
+               buf + (iph.ihl << 2) + (tcph.doff << 2),
+               event->len - (tcph.doff << 2));
         break;
-    case TCP_FD_READ:
-        printf("TCP_FD_READ\n");
+    case TCP_FD_PIPE:
+        printf("TCP_FD_PIPE\n");
         read(fd, &event->type, 4);
         read(fd, &event->len, 4);
-        read(fd, &event->data, event->len);
+        event->data = malloc(event->len);
+        read(fd, event->data, event->len);
         break;
     case TCP_FD_TIMER:
         break;
@@ -179,10 +191,11 @@ int tcp_loop(tcp_connection *connection) {
             return -1;
         }
         for (int i = 0; i < 3; i++) {
-            printf("fd %d: revents: %hu events: %hu pollin: %hu\n", i,
+            printf("fd %d: revents: %hu events: %hu pollin: %hu val: %d\n", i,
                    connection->in_r_fds[i].revents,
                    connection->in_r_fds[i].events,
-                   connection->in_r_fds[i].revents & POLLIN);
+                   connection->in_r_fds[i].revents & POLLIN,
+                   connection->in_r_fds[i].fd);
             if (connection->in_r_fds[i].revents & POLLHUP) {
                 printf("Hang up\n");
             }
@@ -190,30 +203,36 @@ int tcp_loop(tcp_connection *connection) {
 
         printf("Polled: %d\n", ready);
 
-        tcp_event *event;
-        event = malloc(MAX_BUF_SIZE + sizeof(tcp_event));
+        tcp_event event;
+        event.data = NULL;
 
-        if (parse_event(connection, event) == -1) {
-            free(event);
+        if (parse_event(connection, &event) == -1) {
+            if (event.data != NULL) {
+                free(event.data);
+            }
             continue;
         }
 
-        if (event->type == TCP_EVENT_ABORT) {
-            free(event);
-            return 0;
+        if (event.type == TCP_EVENT_ABORT) {
+            if (event.data != NULL) {
+                free(event.data);
+            }
+            break;
         }
 
         int res = 0;
         do {
-            res = connection->state_func(connection, event);
+            res = connection->state_func(connection, &event);
             if (connection->state == TCP_CLOSED) {
-                free(event);
                 printf("Close & return\n");
-                return 0;
+                break;
             }
         } while (res == 1);
-        free(event);
+        if (event.data != NULL) {
+            free(event.data);
+        }
     }
+    tcp_destroy_connection(connection);
     return 0;
 }
 
@@ -226,14 +245,16 @@ int tcp_create_connection(tcp_connection *connection, int dev_fd, endpoint src,
         printf("Pipe input failed\n");
     }
     if (pipe(output) == -1) {
-        printf("Pipe input failed\n");
+        printf("Pipe output failed\n");
     }
 
     connection->in_r_fds[TCP_FD_DEV].fd = dev_fd;
-    connection->in_r_fds[TCP_FD_READ].fd = input[0];
+    connection->in_r_fds[TCP_FD_TIMER].fd = -1;
+    connection->in_r_fds[TCP_FD_PIPE].fd = input[0];
 
     connection->in_w_fds[TCP_FD_DEV] = dev_fd;
-    connection->in_w_fds[TCP_FD_READ] = output[1];
+    connection->in_w_fds[TCP_FD_TIMER] = -1;
+    connection->in_w_fds[TCP_FD_PIPE] = output[1];
 
     connection->ex_r_fds[0].fd = output[0];
 
@@ -252,6 +273,26 @@ int tcp_create_connection(tcp_connection *connection, int dev_fd, endpoint src,
     connection->src = src;
     connection->dest = dest;
 
+    transmission_queue_create(&connection->tq, MAX_BUF_SIZE);
+
+    return 0;
+}
+
+int tcp_destroy_connection(tcp_connection *connection) {
+    for (int i = 0; i < sizeof(connection->in_r_fds) / sizeof(struct pollfd);
+         i++) {
+        if (connection->in_w_fds[i] != connection->in_r_fds[i].fd) {
+            close(connection->in_w_fds[i]);
+        }
+        close(connection->in_r_fds[i].fd);
+    }
+    for (int i = 0; i < sizeof(connection->ex_r_fds) / sizeof(struct pollfd);
+         i++) {
+        close(connection->ex_r_fds[i].fd);
+        close(connection->ex_w_fds[i]);
+    }
+
+    transmission_queue_destroy(&connection->tq);
     return 0;
 }
 
@@ -297,7 +338,7 @@ int tcp_create_tcb(tcp_tcb_snd *snd, tcp_tcb_rcv *rcv) {
 int tcp_send_rst(tcp_connection *connection) {
     tcp_header tcph = create_tcp_header_from_connection(connection);
     tcph.seq = connection->snd.iss;
-    tcph.flags = 0 & TCP_FLAG_RST;
+    tcph.flags |= TCP_FLAG_RST;
 
     tcp_transmit_dev(connection, &tcph, NULL, 0);
     return 0;
@@ -350,7 +391,6 @@ int tcp_state_syn_sent(tcp_connection *connection, tcp_event *event) {
     switch (event->type) {
     case TCP_EVENT_SEGMENT_ARRIVES: {
         tcp_header *tcph = (tcp_header *)event->data;
-        print_tcp_header(tcph);
         if (tcph->flags & TCP_FLAG_ACK) {
             if (wrapping_lt(tcph->seq_ack, connection->snd.iss - 1) ||
                 wrapping_lt(connection->snd.nxt, tcph->seq_ack)) {
@@ -473,7 +513,8 @@ int tcp_state_established(tcp_connection *connection, tcp_event *event) {
         if (payload_len > 0) {
             tcp_header new_tcph = create_tcp_header_from_connection(connection);
             connection->rcv.nxt = tcph->seq + payload_len;
-            // write data to local buffers
+            write(connection->in_w_fds[TCP_FD_PIPE],
+                  ((uint8_t *)tcph) + (tcph->doff << 2), payload_len);
             new_tcph.seq = connection->snd.nxt;
             new_tcph.seq_ack = connection->rcv.nxt;
             new_tcph.flags |= TCP_FLAG_ACK;
@@ -499,7 +540,10 @@ int tcp_state_established(tcp_connection *connection, tcp_event *event) {
         uint8_t *payload = event->data;
         tcp_header new_tcph = create_tcp_header_from_connection(connection);
         new_tcph.seq = connection->snd.nxt;
+        new_tcph.seq_ack = connection->rcv.nxt;
+        new_tcph.flags |= TCP_FLAG_ACK;
 
+        connection->snd.nxt += len;
         tcp_transmit_dev(connection, &new_tcph, payload, len);
     } break;
     case TCP_EVENT_RECEIVE:

@@ -1,12 +1,13 @@
 #pragma once
 
 #include "header.h"
+#include "transmission_queue.h"
 #include <stdint.h>
 #include <sys/poll.h>
 
 #define TCP_FD_DEV 0
 #define TCP_FD_TIMER 1
-#define TCP_FD_READ 2
+#define TCP_FD_PIPE 2
 #define MAX_BUF_SIZE 4096
 
 enum tcp_state {
@@ -41,7 +42,7 @@ enum tcp_event_type {
 typedef struct tcp_event {
     enum tcp_event_type type;
     uint32_t len;
-    uint8_t data[];
+    uint8_t *data;
 } tcp_event;
 
 typedef struct tcp_tcb_snd {
@@ -77,11 +78,13 @@ typedef struct tcp_connection {
     struct pollfd ex_r_fds[1];
     int ex_w_fds[1];
 
+    transmission_queue tq;
+
     endpoint src;
     endpoint dest;
 } tcp_connection;
 
-endpoint create_endpoint(uint32_t addr, uint16_t port);
+endpoint create_endpoint(char *addr, uint16_t port);
 
 tcp_header create_tcp_header_from_connection(tcp_connection *connection);
 
@@ -100,7 +103,7 @@ int tcp_send();
 
 int tcp_receive();
 
-int tcp_close();
+int tcp_close(tcp_connection *connection);
 
 int tcp_abort();
 
@@ -108,6 +111,8 @@ int tcp_status();
 
 int tcp_create_connection(tcp_connection *connection, int dev_fd, endpoint src,
                           endpoint dest);
+
+int tcp_destroy_connection(tcp_connection *connection);
 
 int tcp_create_tcb(tcp_tcb_snd *snd, tcp_tcb_rcv *rcv);
 
