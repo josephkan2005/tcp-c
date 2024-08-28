@@ -76,64 +76,18 @@ int main(int argc, char **argv) {
 
     uint8_t buf[MAX_BUF_SIZE];
     while (1) {
+        if (connection.state == TCP_CLOSE_WAIT) {
+            break;
+        }
         memset(buf, 0, MAX_BUF_SIZE);
         int nbytes = tcp_read(&connection, buf, MAX_BUF_SIZE);
-        printf("Reading: %s end\n", buf);
-        print_hex(buf, nbytes);
-        /* int nread = read(tun_fd, buffer, sizeof(buffer));
-        if (nread < 0) {
-            perror("Reading from interface");
-            close(tun_fd);
-            exit(1);
-        }
-
-        ip_header iph;
-
-        to_ip_header(&iph, buffer);
-
-        if (iph.ver != 4)
+        if (nbytes == 0) {
             continue;
-
-        printf("\n");
-
-        printf("nread: %d\n", nread);
-
-        print_hex(buffer, nread);
-
-        tcp_header tcph;
-
-        to_tcp_header(&tcph, buffer + (iph.ihl << 2));
-
-        uint8_t buf[4096];
-
-        uint32_t temp = iph.src_addr;
-        iph.src_addr = iph.dest_addr;
-        iph.dest_addr = temp;
-        iph.len = htons(IP_HEADER_SIZE + TCP_HEADER_SIZE);
-
-        uint8_t empty[0];
-
-        tcp_ip_header piph;
-        piph.dest_addr = iph.dest_addr;
-        piph.src_addr = iph.src_addr;
-        piph.protocol = htons((uint16_t)IP_PROTO_TCP);
-        piph.tcp_len = htons(20);
-
-        uint16_t temp1 = tcph.src_port;
-        tcph.src_port = tcph.dest_port;
-        tcph.dest_port = temp1;
-        tcph.seq_ack = htonl(ntohl(tcph.seq) + 1);
-        tcph.wnd = htons((uint16_t)1024);
-        tcph.seq = 0;
-        tcph.flags |= TCP_FLAG_ACK;
-        tcph.doff = 5;
-        tcp_checksum(&piph, &tcph, empty);
-
-        from_ip_header(&iph, buf);
-        from_tcp_header(&tcph, buf + IP_HEADER_SIZE);
-
-        printf("\n");*/
+        }
+        printf("Reading: %s\n", buf);
     }
+    printf("Disconnecting\n");
+    tcp_disconnect(&connection);
 
     return 0;
 }

@@ -86,6 +86,9 @@ typedef struct tcp_connection {
 
 endpoint create_endpoint(char *addr, uint16_t port);
 
+int tcp_create_event(enum tcp_event_type type, uint32_t len, uint8_t *payload,
+                     uint8_t *buf);
+
 tcp_header create_tcp_header_from_connection(tcp_connection *connection);
 
 int tcp_connect(tcp_connection *connection, endpoint src, endpoint dest,
@@ -105,7 +108,7 @@ int tcp_receive();
 
 int tcp_close(tcp_connection *connection);
 
-int tcp_abort();
+int tcp_abort(tcp_connection *connection);
 
 int tcp_status();
 
@@ -127,3 +130,7 @@ int tcp_state_syn_sent(tcp_connection *connection, tcp_event *event);
 int tcp_state_established(tcp_connection *connection, tcp_event *event);
 int tcp_state_close_wait(tcp_connection *connection, tcp_event *event);
 int tcp_state_last_ack(tcp_connection *connection, tcp_event *event);
+int tcp_state_fin_wait_1(tcp_connection *connection, tcp_event *event);
+int tcp_state_fin_wait_2(tcp_connection *connection, tcp_event *event);
+int tcp_state_time_wait(tcp_connection *connection, tcp_event *event);
+int tcp_state_closing(tcp_connection *connection, tcp_event *event);

@@ -28,6 +28,19 @@ endpoint create_endpoint(char *addr, uint16_t port) {
     return e;
 }
 
+int tcp_create_event(enum tcp_event_type type, uint32_t len, uint8_t *payload,
+                     uint8_t *event_buf) {
+    tcp_event *event = (tcp_event *)event_buf;
+    event->type = type;
+    event->len = len;
+    memcpy(event_buf + 8, payload, len);
+    return 0;
+}
+
+tcp_header create_tcp_header_from_connection(tcp_connection *connection) {
+    return create_tcp_header(connection->src.port, connection->dest.port);
+}
+
 int tcp_connect(tcp_connection *connection, endpoint src, endpoint dest,
                 int tun_fd) {
     printf("Connect\n");
@@ -46,11 +59,9 @@ int tcp_write(tcp_connection *connection, uint8_t *buf, uint16_t len) {
         return -1;
     printf("Write\n");
     int fd = connection->ex_w_fds[0];
-    uint8_t event_buf[MAX_BUF_SIZE + 12];
-    tcp_event *event = (tcp_event *)event_buf;
-    event->type = TCP_EVENT_SEND;
-    event->len = len;
-    memcpy(event_buf + 8, buf, len);
+    uint8_t event_buf[MAX_BUF_SIZE + 8];
+    tcp_create_event(TCP_EVENT_SEND, len, buf, event_buf);
+
     int res = write(fd, event_buf, len + 8);
     if (res < 0) {
         printf("Write failed\n");
@@ -63,10 +74,14 @@ int tcp_write(tcp_connection *connection, uint8_t *buf, uint16_t len) {
 int tcp_read(tcp_connection *connection, uint8_t *buf, int nbytes) {
     if (connection->state == TCP_CLOSED)
         return -1;
-    int ready = poll(connection->ex_r_fds, 1, -1);
-    if (ready == -1) {
+    int ready = poll(connection->ex_r_fds, 1, 1000);
+    if (ready == 0) {
         printf("Poll timed out");
-        return -1;
+        return ready;
+    }
+    if (ready == -1) {
+        printf("Poll errored");
+        return ready;
     }
 
     printf("Read\n");
@@ -78,6 +93,7 @@ int tcp_read(tcp_connection *connection, uint8_t *buf, int nbytes) {
 
 int tcp_disconnect(tcp_connection *connection) {
     printf("Disconnect\n");
+    tcp_close(connection);
     return 0;
 }
 
@@ -100,11 +116,18 @@ int tcp_receive() {
 
 int tcp_close(tcp_connection *connection) {
     printf("Close\n");
+    uint8_t event_buf[MAX_BUF_SIZE + 8];
+    tcp_create_event(TCP_EVENT_CLOSE, 0, NULL, event_buf);
+    write(connection->ex_w_fds[0], event_buf, 8);
+
     return 0;
 }
 
-int tcp_abort() {
+int tcp_abort(tcp_connection *connection) {
     printf("Abort\n");
+    uint8_t event_buf[MAX_BUF_SIZE + 8];
+    tcp_create_event(TCP_EVENT_ABORT, 0, NULL, event_buf);
+    write(connection->ex_w_fds[0], event_buf, 8);
     return 0;
 }
 
@@ -443,6 +466,11 @@ int tcp_state_syn_sent(tcp_connection *connection, tcp_event *event) {
     case TCP_EVENT_CLOSE:
         connection->state = TCP_CLOSED;
         break;
+    case TCP_EVENT_SEND:
+        // TODO: Queue data onto transmission queue, send them when reach
+        // established
+
+        break;
     default:
         break;
     }
@@ -456,6 +484,7 @@ int tcp_state_syn_received(tcp_connection *connection, tcp_event *event) {
 
 int tcp_state_established(tcp_connection *connection, tcp_event *event) {
     printf("Established state\n");
+    print_tcp_event_type(event->type);
     switch (event->type) {
     case TCP_EVENT_SEGMENT_ARRIVES: {
         tcp_header *tcph = (tcp_header *)event->data;
@@ -530,9 +559,8 @@ int tcp_state_established(tcp_connection *connection, tcp_event *event) {
             tcp_transmit_dev(connection, &new_tcph, NULL, 0);
             connection->state = TCP_CLOSE_WAIT;
             connection->state_func = tcp_state_close_wait;
-            return 1;
+            printf("CHANGED CONNECTION TO CLOSING\n");
         }
-
     } break;
     case TCP_EVENT_OPEN:
     case TCP_EVENT_SEND: {
@@ -547,7 +575,19 @@ int tcp_state_established(tcp_connection *connection, tcp_event *event) {
         tcp_transmit_dev(connection, &new_tcph, payload, len);
     } break;
     case TCP_EVENT_RECEIVE:
-    case TCP_EVENT_CLOSE:
+    case TCP_EVENT_CLOSE: {
+        tcp_header new_tcph = create_tcp_header_from_connection(connection);
+        new_tcph.seq = connection->snd.nxt;
+        new_tcph.seq_ack = connection->rcv.nxt;
+        new_tcph.flags |= TCP_FLAG_ACK;
+        new_tcph.flags |= TCP_FLAG_FIN;
+        connection->snd.nxt += 1;
+
+        tcp_transmit_dev(connection, &new_tcph, NULL, 0);
+
+        connection->state = TCP_FIN_WAIT_1;
+        connection->state_func = tcp_state_fin_wait_1;
+    } break;
     case TCP_EVENT_ABORT:
     case TCP_EVENT_STATUS:
     case TCP_EVENT_USER_TIMEOUT:
@@ -561,19 +601,43 @@ int tcp_state_established(tcp_connection *connection, tcp_event *event) {
 
 int tcp_state_close_wait(tcp_connection *connection, tcp_event *event) {
     printf("Close wait state\n");
-    tcp_header new_tcph = create_tcp_header_from_connection(connection);
-    new_tcph.seq = connection->snd.nxt;
-    new_tcph.seq_ack = connection->rcv.nxt;
-    new_tcph.flags |= TCP_FLAG_ACK;
-    new_tcph.flags |= TCP_FLAG_FIN;
-    connection->snd.nxt += 1;
+    switch (event->type) {
 
-    tcp_transmit_dev(connection, &new_tcph, NULL, 0);
+    case TCP_EVENT_OPEN:
+    case TCP_EVENT_SEND: {
+        uint32_t len = event->len;
+        uint8_t *payload = event->data;
+        tcp_header new_tcph = create_tcp_header_from_connection(connection);
+        new_tcph.seq = connection->snd.nxt;
+        new_tcph.seq_ack = connection->rcv.nxt;
+        new_tcph.flags |= TCP_FLAG_ACK;
 
-    connection->state = TCP_LAST_ACK;
-    connection->state_func = tcp_state_last_ack;
+        connection->snd.nxt += len;
+        tcp_transmit_dev(connection, &new_tcph, payload, len);
+    } break;
+    case TCP_EVENT_RECEIVE:
+    case TCP_EVENT_CLOSE: {
+        tcp_header new_tcph = create_tcp_header_from_connection(connection);
+        new_tcph.seq = connection->snd.nxt;
+        new_tcph.seq_ack = connection->rcv.nxt;
+        new_tcph.flags |= TCP_FLAG_ACK;
+        new_tcph.flags |= TCP_FLAG_FIN;
+        connection->snd.nxt += 1;
 
-    return 1;
+        tcp_transmit_dev(connection, &new_tcph, NULL, 0);
+
+        connection->state = TCP_LAST_ACK;
+        connection->state_func = tcp_state_last_ack;
+    } break;
+    case TCP_EVENT_ABORT:
+    case TCP_EVENT_STATUS:
+    case TCP_EVENT_SEGMENT_ARRIVES:
+    case TCP_EVENT_USER_TIMEOUT:
+    case TCP_EVENT_RETRANSMISSION_TIMEOUT:
+    case TCP_EVENT_TIME_WAIT_TIMEOUT:
+        break;
+    }
+    return 0;
 }
 
 int tcp_state_last_ack(tcp_connection *connection, tcp_event *event) {
@@ -590,6 +654,39 @@ int tcp_state_last_ack(tcp_connection *connection, tcp_event *event) {
     } break;
     case TCP_EVENT_OPEN:
     case TCP_EVENT_SEND:
+        printf("Error: connnection closing\n");
+        break;
+    case TCP_EVENT_RECEIVE:
+        printf("Error: connnection closing\n");
+        break;
+    case TCP_EVENT_CLOSE:
+    case TCP_EVENT_ABORT:
+    case TCP_EVENT_STATUS:
+    case TCP_EVENT_USER_TIMEOUT:
+    case TCP_EVENT_RETRANSMISSION_TIMEOUT:
+    case TCP_EVENT_TIME_WAIT_TIMEOUT:
+        break;
+    }
+    return 0;
+}
+
+int tcp_state_fin_wait_1(tcp_connection *connection, tcp_event *event) {
+    printf("Fin wait 1 state\n");
+    switch (event->type) {
+    case TCP_EVENT_SEGMENT_ARRIVES: {
+        tcp_header *tcph = (tcp_header *)event->data;
+        if (tcph->flags & TCP_FLAG_ACK) {
+            if (tcph->seq_ack == connection->snd.nxt) {
+                connection->state = TCP_FIN_WAIT_2;
+                connection->state_func = tcp_state_fin_wait_2;
+                break;
+            }
+        }
+    } break;
+    case TCP_EVENT_OPEN:
+    case TCP_EVENT_SEND:
+        printf("Error: connnection closing\n");
+        break;
     case TCP_EVENT_RECEIVE:
     case TCP_EVENT_CLOSE:
     case TCP_EVENT_ABORT:
@@ -602,6 +699,79 @@ int tcp_state_last_ack(tcp_connection *connection, tcp_event *event) {
     return 0;
 }
 
-tcp_header create_tcp_header_from_connection(tcp_connection *connection) {
-    return create_tcp_header(connection->src.port, connection->dest.port);
+int tcp_state_fin_wait_2(tcp_connection *connection, tcp_event *event) {
+    printf("Fin wait 2 state\n");
+    switch (event->type) {
+    case TCP_EVENT_SEGMENT_ARRIVES: {
+        tcp_header *tcph = (tcp_header *)event->data;
+        if (tcph->flags & TCP_FLAG_FIN) {
+            if (tcph->seq_ack == connection->snd.nxt) {
+                connection->state = TCP_TIME_WAIT;
+                connection->state_func = tcp_state_time_wait;
+                break;
+            }
+        }
+    } break;
+    case TCP_EVENT_OPEN:
+    case TCP_EVENT_SEND:
+        printf("Error: connnection closing\n");
+        break;
+    case TCP_EVENT_RECEIVE:
+    case TCP_EVENT_CLOSE:
+    case TCP_EVENT_ABORT:
+    case TCP_EVENT_STATUS:
+    case TCP_EVENT_USER_TIMEOUT:
+    case TCP_EVENT_RETRANSMISSION_TIMEOUT:
+    case TCP_EVENT_TIME_WAIT_TIMEOUT:
+        break;
+    }
+    return 0;
+}
+
+int tcp_state_time_wait(tcp_connection *connection, tcp_event *event) {
+    printf("Time wait\n");
+    switch (event->type) {
+    case TCP_EVENT_RETRANSMISSION_TIMEOUT: {
+
+    } break;
+    case TCP_EVENT_OPEN:
+    case TCP_EVENT_SEND:
+        printf("Error: connnection closing\n");
+        break;
+    case TCP_EVENT_RECEIVE:
+        printf("Error: connnection closing\n");
+        break;
+    case TCP_EVENT_CLOSE:
+    case TCP_EVENT_ABORT:
+    case TCP_EVENT_STATUS:
+    case TCP_EVENT_SEGMENT_ARRIVES:
+    case TCP_EVENT_USER_TIMEOUT:
+    case TCP_EVENT_TIME_WAIT_TIMEOUT:
+        break;
+    }
+    return 0;
+}
+
+int tcp_state_closing(tcp_connection *connection, tcp_event *event) {
+    printf("Closing\n");
+    switch (event->type) {
+    case TCP_EVENT_RETRANSMISSION_TIMEOUT: {
+
+    } break;
+    case TCP_EVENT_OPEN:
+    case TCP_EVENT_SEND:
+        printf("Error: connnection closing\n");
+        break;
+    case TCP_EVENT_RECEIVE:
+        printf("Error: connnection closing\n");
+        break;
+    case TCP_EVENT_CLOSE:
+    case TCP_EVENT_ABORT:
+    case TCP_EVENT_STATUS:
+    case TCP_EVENT_SEGMENT_ARRIVES:
+    case TCP_EVENT_USER_TIMEOUT:
+    case TCP_EVENT_TIME_WAIT_TIMEOUT:
+        break;
+    }
+    return 0;
 }
