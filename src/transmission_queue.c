@@ -13,12 +13,19 @@ int transmission_queue_create(transmission_queue *tq, uint32_t cap) {
     return 0;
 }
 
-int transmission_queue_front(transmission_queue *tq, uint8_t *buf, uint32_t seq,
+int transmission_queue_front(transmission_queue *tq, uint8_t *buf,
                              uint32_t len) {
+    if (tq->size == 0) {
+        return 0;
+    }
     if (len > tq->size) {
         len = tq->size;
     }
-    memcpy(buf, tq->data + tq->head, len);
+    int limit = tq->head + len >= tq->cap ? tq->cap - len : len;
+    memcpy(tq->data + tq->head, buf, limit);
+    if (limit < len) {
+        memcpy(tq->data, buf + limit, len - limit);
+    }
     return len;
 }
 
@@ -27,25 +34,40 @@ int transmission_queue_push_back(transmission_queue *tq, uint8_t *buf,
     if (tq->size + len > tq->cap) {
         transmission_queue_realloc(tq);
     }
-    int limit = tq->head + len >= tq->cap ? tq->cap - len : len;
-    memcpy(tq->data + tq->head, buf, limit);
+    int limit = ((tq->head + tq->size) % tq->cap) + len > (tq->cap - 1)
+                    ? (tq->cap - 1) - (tq->head + tq->size)
+                    : len;
+    memcpy(tq->data + tq->head + tq->size, buf, limit);
     if (limit < len) {
         memcpy(tq->data, buf + limit, len - limit);
     }
+
+    tq->size += len;
 
     return 0;
 }
 
 int transmission_queue_pop_front(transmission_queue *tq, uint32_t len) {
+    if (len > tq->size) {
+        printf("Trying to pop more than size: size: %u len: %u\n", tq->size,
+               len);
+        return 1;
+    }
     tq->head += len;
+    tq->head %= tq->cap;
     tq->head_seq += len;
+    tq->size -= len;
     return 0;
 }
 
 int transmission_queue_realloc(transmission_queue *tq) {
+    if (tq->data == NULL) {
+        printf("Cannot reallocate non-allocated tq\n");
+        return 1;
+    }
     uint32_t new_cap = 2 * tq->cap;
     uint8_t *new_tq_data = malloc(new_cap);
-    transmission_queue_front(tq, new_tq_data, tq->head_seq, tq->size);
+    transmission_queue_front(tq, new_tq_data, tq->size);
     tq->cap = new_cap;
     free(tq->data);
     tq->data = new_tq_data;
@@ -54,6 +76,8 @@ int transmission_queue_realloc(transmission_queue *tq) {
 
 int transmission_queue_destroy(transmission_queue *tq) {
     tq->size = 0;
-    free(tq->data);
+    if (tq->data != NULL) {
+        free(tq->data);
+    }
     return 0;
 }

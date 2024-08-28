@@ -239,3 +239,8 @@ int wrapping_lt(uint32_t left, uint32_t right) {
 int wrapping_between(uint32_t left, uint32_t middle, uint32_t right) {
     return wrapping_lt(left, middle) && wrapping_lt(middle, right);
 }
+
+uint32_t wrapping_len(uint32_t left, uint32_t right) {
+    return right >= left ? right - left
+                         : (uint32_t)(1 << 31) - (left - (right + 1));
+}

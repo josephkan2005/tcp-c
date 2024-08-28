@@ -50,6 +50,11 @@ void print_tcp_tcb(tcp_tcb_snd *snd, tcp_tcb_rcv *rcv) {
            rcv->irs, rcv->nxt, rcv->wnd, rcv->up);
 }
 
+void print_tq(transmission_queue *tq) {
+    printf("\ncap: %u size: %u head: %u head_seq %u\n", tq->cap, tq->size,
+           tq->head, tq->head_seq);
+}
+
 void print_tcp_event_type(enum tcp_event_type type) {
     switch (type) {
     case TCP_EVENT_OPEN:

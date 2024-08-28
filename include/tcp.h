@@ -9,6 +9,7 @@
 #define TCP_FD_TIMER 1
 #define TCP_FD_PIPE 2
 #define MAX_BUF_SIZE 4096
+#define EVENT_DOFF 8
 
 enum tcp_state {
     TCP_LISTEN,

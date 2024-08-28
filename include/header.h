@@ -103,3 +103,5 @@ uint16_t ip_checksum(ip_header *iph);
 int wrapping_lt(uint32_t left, uint32_t right);
 
 int wrapping_between(uint32_t left, uint32_t middle, uint32_t right);
+
+uint32_t wrapping_len(uint32_t left, uint32_t right);

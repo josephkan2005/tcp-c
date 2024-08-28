@@ -33,7 +33,7 @@ int tcp_create_event(enum tcp_event_type type, uint32_t len, uint8_t *payload,
     tcp_event *event = (tcp_event *)event_buf;
     event->type = type;
     event->len = len;
-    memcpy(event_buf + 8, payload, len);
+    memcpy(event_buf + EVENT_DOFF, payload, len);
     return 0;
 }
 
@@ -59,10 +59,10 @@ int tcp_write(tcp_connection *connection, uint8_t *buf, uint16_t len) {
         return -1;
     printf("Write\n");
     int fd = connection->ex_w_fds[0];
-    uint8_t event_buf[MAX_BUF_SIZE + 8];
+    uint8_t event_buf[MAX_BUF_SIZE + EVENT_DOFF];
     tcp_create_event(TCP_EVENT_SEND, len, buf, event_buf);
 
-    int res = write(fd, event_buf, len + 8);
+    int res = write(fd, event_buf, len + EVENT_DOFF);
     if (res < 0) {
         printf("Write failed\n");
         return -1;
@@ -116,7 +116,7 @@ int tcp_receive() {
 
 int tcp_close(tcp_connection *connection) {
     printf("Close\n");
-    uint8_t event_buf[MAX_BUF_SIZE + 8];
+    uint8_t event_buf[MAX_BUF_SIZE + EVENT_DOFF];
     tcp_create_event(TCP_EVENT_CLOSE, 0, NULL, event_buf);
     write(connection->ex_w_fds[0], event_buf, 8);
 
@@ -125,7 +125,7 @@ int tcp_close(tcp_connection *connection) {
 
 int tcp_abort(tcp_connection *connection) {
     printf("Abort\n");
-    uint8_t event_buf[MAX_BUF_SIZE + 8];
+    uint8_t event_buf[MAX_BUF_SIZE + EVENT_DOFF];
     tcp_create_event(TCP_EVENT_ABORT, 0, NULL, event_buf);
     write(connection->ex_w_fds[0], event_buf, 8);
     return 0;
@@ -358,12 +358,43 @@ int tcp_create_tcb(tcp_tcb_snd *snd, tcp_tcb_rcv *rcv) {
     return 0;
 }
 
+int tcp_requeue_send(tcp_connection *connection) {
+    if (wrapping_lt(connection->snd.nxt, connection->tq.head_seq)) {
+        printf("Cannot requeue already acknowledged segments\n");
+        return 1;
+    }
+    uint8_t event_buf[MAX_BUF_SIZE];
+    uint32_t payload_len = wrapping_len(
+        connection->snd.nxt, connection->tq.head_seq + connection->tq.size);
+    printf("Payload len to requeue: %u\n", payload_len);
+    if (payload_len == 0) {
+        return 0;
+    }
+    uint8_t payload[MAX_BUF_SIZE];
+    transmission_queue_front(&connection->tq, payload, payload_len);
+    tcp_create_event(TCP_EVENT_SEND, payload_len, payload, event_buf);
+    write(connection->ex_w_fds[0], event_buf, payload_len + EVENT_DOFF);
+    return 0;
+}
+
 int tcp_send_rst(tcp_connection *connection) {
     tcp_header tcph = create_tcp_header_from_connection(connection);
     tcph.seq = connection->snd.iss;
     tcph.flags |= TCP_FLAG_RST;
 
     tcp_transmit_dev(connection, &tcph, NULL, 0);
+    return 0;
+}
+
+int tcp_send_fin(tcp_connection *connection) {
+    tcp_header new_tcph = create_tcp_header_from_connection(connection);
+    new_tcph.seq = connection->snd.nxt;
+    new_tcph.seq_ack = connection->rcv.nxt;
+    new_tcph.flags |= TCP_FLAG_ACK;
+    new_tcph.flags |= TCP_FLAG_FIN;
+    connection->snd.nxt += 1;
+
+    tcp_transmit_dev(connection, &new_tcph, NULL, 0);
     return 0;
 }
 
@@ -392,9 +423,9 @@ int tcp_check_acceptability(tcp_connection *connection, tcp_header *tcph,
 
 int tcp_state_closed(tcp_connection *connection) {
     printf("Closed state\n");
-    //
     // Only support active, always send SYN
     tcp_create_tcb(&connection->snd, &connection->rcv);
+    connection->tq.head_seq = connection->snd.nxt;
     tcp_header tcph = create_tcp_header_from_connection(connection);
     tcph.seq = connection->snd.iss;
     tcph.flags |= TCP_FLAG_SYN;
@@ -448,6 +479,7 @@ int tcp_state_syn_sent(tcp_connection *connection, tcp_event *event) {
                 new_tcph.seq_ack = connection->rcv.nxt;
                 new_tcph.flags |= TCP_FLAG_ACK;
                 tcp_transmit_dev(connection, &new_tcph, NULL, 0);
+                tcp_requeue_send(connection);
                 break;
             } else {
                 connection->state = TCP_SYN_RECEIVED;
@@ -465,9 +497,8 @@ int tcp_state_syn_sent(tcp_connection *connection, tcp_event *event) {
         connection->state = TCP_CLOSED;
         break;
     case TCP_EVENT_SEND:
-        // TODO: Queue data onto transmission queue, send them when reach
-        // established
-
+        printf("Pushing %ub to tq\n", event->len);
+        transmission_queue_push_back(&connection->tq, event->data, event->len);
         break;
     case TCP_EVENT_ABORT:
         connection->state = TCP_CLOSED;
@@ -481,15 +512,20 @@ int tcp_state_syn_sent(tcp_connection *connection, tcp_event *event) {
 int tcp_state_syn_received(tcp_connection *connection, tcp_event *event) {
     printf("Syn received state\n");
     switch (event->type) {
+    case TCP_EVENT_SEGMENT_ARRIVES:
+        break;
     case TCP_EVENT_OPEN:
         printf("Connection already exists\n");
         break;
     case TCP_EVENT_SEND:
     case TCP_EVENT_RECEIVE:
     case TCP_EVENT_CLOSE:
+        tcp_send_fin(connection);
+        connection->state = TCP_FIN_WAIT_1;
+        connection->state_func = tcp_state_fin_wait_1;
+        break;
     case TCP_EVENT_ABORT:
     case TCP_EVENT_STATUS:
-    case TCP_EVENT_SEGMENT_ARRIVES:
     case TCP_EVENT_USER_TIMEOUT:
     case TCP_EVENT_RETRANSMISSION_TIMEOUT:
     case TCP_EVENT_TIME_WAIT_TIMEOUT:
@@ -529,7 +565,10 @@ int tcp_state_established(tcp_connection *connection, tcp_event *event) {
             if (wrapping_between(connection->snd.una, tcph->seq_ack,
                                  connection->snd.nxt + 1)) {
                 connection->snd.una = tcph->seq_ack;
-                // dump segments before una in retransmission queue
+
+                transmission_queue_pop_front(
+                    &connection->tq,
+                    wrapping_len(connection->tq.head_seq, connection->snd.una));
 
                 if (wrapping_lt(connection->snd.wl1, tcph->seq) ||
                     (connection->snd.wl1 == tcph->seq &&
@@ -538,6 +577,7 @@ int tcp_state_established(tcp_connection *connection, tcp_event *event) {
                     connection->snd.wl1 = tcph->seq;
                     connection->snd.wl2 = tcph->seq_ack;
                 }
+                tcp_requeue_send(connection);
             } else if (wrapping_lt(tcph->seq_ack, connection->snd.una)) {
                 break;
             } else if (wrapping_lt(connection->snd.nxt, tcph->seq_ack)) {
@@ -584,6 +624,11 @@ int tcp_state_established(tcp_connection *connection, tcp_event *event) {
     case TCP_EVENT_SEND: {
         uint32_t len = event->len;
         uint8_t *payload = event->data;
+        uint32_t limit =
+            connection->snd.una + connection->snd.wnd - connection->snd.nxt;
+        len = len > limit ? limit : len;
+        printf("Pushing %ub to tq\n", len);
+        transmission_queue_push_back(&connection->tq, payload, len);
         tcp_header new_tcph = create_tcp_header_from_connection(connection);
         new_tcph.seq = connection->snd.nxt;
         new_tcph.seq_ack = connection->rcv.nxt;
@@ -594,14 +639,7 @@ int tcp_state_established(tcp_connection *connection, tcp_event *event) {
     } break;
     case TCP_EVENT_RECEIVE:
     case TCP_EVENT_CLOSE: {
-        tcp_header new_tcph = create_tcp_header_from_connection(connection);
-        new_tcph.seq = connection->snd.nxt;
-        new_tcph.seq_ack = connection->rcv.nxt;
-        new_tcph.flags |= TCP_FLAG_ACK;
-        new_tcph.flags |= TCP_FLAG_FIN;
-        connection->snd.nxt += 1;
-
-        tcp_transmit_dev(connection, &new_tcph, NULL, 0);
+        tcp_send_fin(connection);
 
         connection->state = TCP_FIN_WAIT_1;
         connection->state_func = tcp_state_fin_wait_1;
@@ -637,14 +675,7 @@ int tcp_state_close_wait(tcp_connection *connection, tcp_event *event) {
     } break;
     case TCP_EVENT_RECEIVE:
     case TCP_EVENT_CLOSE: {
-        tcp_header new_tcph = create_tcp_header_from_connection(connection);
-        new_tcph.seq = connection->snd.nxt;
-        new_tcph.seq_ack = connection->rcv.nxt;
-        new_tcph.flags |= TCP_FLAG_ACK;
-        new_tcph.flags |= TCP_FLAG_FIN;
-        connection->snd.nxt += 1;
-
-        tcp_transmit_dev(connection, &new_tcph, NULL, 0);
+        tcp_send_fin(connection);
 
         connection->state = TCP_LAST_ACK;
         connection->state_func = tcp_state_last_ack;
@@ -676,11 +707,7 @@ int tcp_state_last_ack(tcp_connection *connection, tcp_event *event) {
         printf("Connection already exists\n");
         break;
     case TCP_EVENT_SEND:
-        printf("Error: connnection closing\n");
-        break;
     case TCP_EVENT_RECEIVE:
-        printf("Error: connnection closing\n");
-        break;
     case TCP_EVENT_CLOSE:
         printf("Error: connnection closing\n");
         break;
@@ -712,10 +739,9 @@ int tcp_state_fin_wait_1(tcp_connection *connection, tcp_event *event) {
     case TCP_EVENT_OPEN:
         printf("Connection already exists\n");
         break;
-    case TCP_EVENT_SEND:
-        printf("Error: connnection closing\n");
-        break;
     case TCP_EVENT_RECEIVE:
+        break;
+    case TCP_EVENT_SEND:
     case TCP_EVENT_CLOSE:
         printf("Error: connnection closing\n");
         break;
@@ -770,11 +796,7 @@ int tcp_state_time_wait(tcp_connection *connection, tcp_event *event) {
         printf("Connection already exists\n");
         break;
     case TCP_EVENT_SEND:
-        printf("Error: connnection closing\n");
-        break;
     case TCP_EVENT_RECEIVE:
-        printf("Error: connnection closing\n");
-        break;
     case TCP_EVENT_CLOSE:
         printf("Error: connnection closing\n");
         break;
@@ -799,22 +821,20 @@ int tcp_state_closing(tcp_connection *connection, tcp_event *event) {
     case TCP_EVENT_OPEN:
         printf("Connection already exists\n");
         break;
-    case TCP_EVENT_SEND:
-        printf("Error: connnection closing\n");
-        break;
-    case TCP_EVENT_RECEIVE:
-        printf("Error: connnection closing\n");
-        break;
-    case TCP_EVENT_CLOSE:
-        printf("Error: connnection closing\n");
-        break;
     case TCP_EVENT_ABORT:
         connection->state = TCP_CLOSED;
         break;
     case TCP_EVENT_STATUS:
     case TCP_EVENT_SEGMENT_ARRIVES:
+        break;
     case TCP_EVENT_USER_TIMEOUT:
+        break;
     case TCP_EVENT_TIME_WAIT_TIMEOUT:
+        break;
+    case TCP_EVENT_SEND:
+    case TCP_EVENT_RECEIVE:
+    case TCP_EVENT_CLOSE:
+        printf("Error: connnection closing\n");
         break;
     }
     return 0;
