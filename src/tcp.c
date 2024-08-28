@@ -399,9 +399,7 @@ int tcp_state_closed(tcp_connection *connection) {
     tcph.seq = connection->snd.iss;
     tcph.flags |= TCP_FLAG_SYN;
 
-    uint8_t dummy;
-
-    tcp_transmit_dev(connection, &tcph, &dummy, 0);
+    tcp_transmit_dev(connection, &tcph, NULL, 0);
 
     connection->state = TCP_SYN_SENT;
     connection->state_func = tcp_state_syn_sent;
@@ -471,6 +469,9 @@ int tcp_state_syn_sent(tcp_connection *connection, tcp_event *event) {
         // established
 
         break;
+    case TCP_EVENT_ABORT:
+        connection->state = TCP_CLOSED;
+        break;
     default:
         break;
     }
@@ -479,6 +480,21 @@ int tcp_state_syn_sent(tcp_connection *connection, tcp_event *event) {
 
 int tcp_state_syn_received(tcp_connection *connection, tcp_event *event) {
     printf("Syn received state\n");
+    switch (event->type) {
+    case TCP_EVENT_OPEN:
+        printf("Connection already exists\n");
+        break;
+    case TCP_EVENT_SEND:
+    case TCP_EVENT_RECEIVE:
+    case TCP_EVENT_CLOSE:
+    case TCP_EVENT_ABORT:
+    case TCP_EVENT_STATUS:
+    case TCP_EVENT_SEGMENT_ARRIVES:
+    case TCP_EVENT_USER_TIMEOUT:
+    case TCP_EVENT_RETRANSMISSION_TIMEOUT:
+    case TCP_EVENT_TIME_WAIT_TIMEOUT:
+        break;
+    }
     return 0;
 }
 
@@ -563,6 +579,8 @@ int tcp_state_established(tcp_connection *connection, tcp_event *event) {
         }
     } break;
     case TCP_EVENT_OPEN:
+        printf("Connection already exists\n");
+        break;
     case TCP_EVENT_SEND: {
         uint32_t len = event->len;
         uint8_t *payload = event->data;
@@ -604,6 +622,8 @@ int tcp_state_close_wait(tcp_connection *connection, tcp_event *event) {
     switch (event->type) {
 
     case TCP_EVENT_OPEN:
+        printf("Connection already exists\n");
+        break;
     case TCP_EVENT_SEND: {
         uint32_t len = event->len;
         uint8_t *payload = event->data;
@@ -653,6 +673,8 @@ int tcp_state_last_ack(tcp_connection *connection, tcp_event *event) {
         }
     } break;
     case TCP_EVENT_OPEN:
+        printf("Connection already exists\n");
+        break;
     case TCP_EVENT_SEND:
         printf("Error: connnection closing\n");
         break;
@@ -660,7 +682,11 @@ int tcp_state_last_ack(tcp_connection *connection, tcp_event *event) {
         printf("Error: connnection closing\n");
         break;
     case TCP_EVENT_CLOSE:
+        printf("Error: connnection closing\n");
+        break;
     case TCP_EVENT_ABORT:
+        connection->state = TCP_CLOSED;
+        break;
     case TCP_EVENT_STATUS:
     case TCP_EVENT_USER_TIMEOUT:
     case TCP_EVENT_RETRANSMISSION_TIMEOUT:
@@ -684,11 +710,15 @@ int tcp_state_fin_wait_1(tcp_connection *connection, tcp_event *event) {
         }
     } break;
     case TCP_EVENT_OPEN:
+        printf("Connection already exists\n");
+        break;
     case TCP_EVENT_SEND:
         printf("Error: connnection closing\n");
         break;
     case TCP_EVENT_RECEIVE:
     case TCP_EVENT_CLOSE:
+        printf("Error: connnection closing\n");
+        break;
     case TCP_EVENT_ABORT:
     case TCP_EVENT_STATUS:
     case TCP_EVENT_USER_TIMEOUT:
@@ -713,6 +743,8 @@ int tcp_state_fin_wait_2(tcp_connection *connection, tcp_event *event) {
         }
     } break;
     case TCP_EVENT_OPEN:
+        printf("Connection already exists\n");
+        break;
     case TCP_EVENT_SEND:
         printf("Error: connnection closing\n");
         break;
@@ -735,6 +767,8 @@ int tcp_state_time_wait(tcp_connection *connection, tcp_event *event) {
 
     } break;
     case TCP_EVENT_OPEN:
+        printf("Connection already exists\n");
+        break;
     case TCP_EVENT_SEND:
         printf("Error: connnection closing\n");
         break;
@@ -742,7 +776,11 @@ int tcp_state_time_wait(tcp_connection *connection, tcp_event *event) {
         printf("Error: connnection closing\n");
         break;
     case TCP_EVENT_CLOSE:
+        printf("Error: connnection closing\n");
+        break;
     case TCP_EVENT_ABORT:
+        connection->state = TCP_CLOSED;
+        break;
     case TCP_EVENT_STATUS:
     case TCP_EVENT_SEGMENT_ARRIVES:
     case TCP_EVENT_USER_TIMEOUT:
@@ -759,6 +797,8 @@ int tcp_state_closing(tcp_connection *connection, tcp_event *event) {
 
     } break;
     case TCP_EVENT_OPEN:
+        printf("Connection already exists\n");
+        break;
     case TCP_EVENT_SEND:
         printf("Error: connnection closing\n");
         break;
@@ -766,7 +806,11 @@ int tcp_state_closing(tcp_connection *connection, tcp_event *event) {
         printf("Error: connnection closing\n");
         break;
     case TCP_EVENT_CLOSE:
+        printf("Error: connnection closing\n");
+        break;
     case TCP_EVENT_ABORT:
+        connection->state = TCP_CLOSED;
+        break;
     case TCP_EVENT_STATUS:
     case TCP_EVENT_SEGMENT_ARRIVES:
     case TCP_EVENT_USER_TIMEOUT:
