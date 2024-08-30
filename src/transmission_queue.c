@@ -23,9 +23,9 @@ int transmission_queue_front(transmission_queue *tq, uint8_t *buf,
         len = tq->size;
     }
     int limit = tq->head + len >= tq->cap ? tq->cap - len : len;
-    memcpy(tq->data + tq->head, buf, limit);
+    memcpy(buf, tq->data + tq->head, limit);
     if (limit < len) {
-        memcpy(tq->data, buf + limit, len - limit);
+        memcpy(buf + limit, tq->data, len - limit);
     }
     return len;
 }
@@ -39,15 +39,16 @@ int transmission_queue_times_front(transmission_queue *tq, time_t *buf,
         len = tq->size;
     }
     int limit = tq->head + len >= tq->cap ? tq->cap - len : len;
-    memcpy(tq->send_times + tq->head, buf, limit * sizeof(time_t));
+    memcpy(buf, tq->send_times + tq->head, limit * sizeof(time_t));
     if (limit < len) {
-        memcpy(tq->send_times, buf + limit, (len - limit) * sizeof(time_t));
+        memcpy(buf + limit, tq->send_times, (len - limit) * sizeof(time_t));
     }
     return len;
 }
 
 int transmission_queue_push_back(transmission_queue *tq, uint8_t *buf,
                                  uint32_t len, time_t sent_at) {
+    printf("Push sent at: %ld\n", sent_at);
     if (tq->size + len > tq->cap) {
         transmission_queue_realloc(tq);
     }
@@ -88,6 +89,7 @@ int transmission_queue_set_times(transmission_queue *tq, uint32_t len,
     if (tq->size == 0) {
         return 0;
     }
+    printf("Set sent at: %ld\n", sent_at);
     if (len > tq->size) {
         len = tq->size;
     }
@@ -104,7 +106,7 @@ int transmission_queue_set_times(transmission_queue *tq, uint32_t len,
 }
 
 int transmission_queue_realloc(transmission_queue *tq) {
-    if (tq->data == NULL) {
+    if (tq->data == NULL || tq->send_times == NULL) {
         printf("Cannot reallocate non-allocated tq\n");
         return 1;
     }

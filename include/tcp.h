@@ -2,6 +2,7 @@
 
 #include "header.h"
 #include "transmission_queue.h"
+#include <pthread.h>
 #include <stdint.h>
 #include <sys/poll.h>
 #include <sys/timerfd.h>
@@ -100,8 +101,8 @@ int tcp_create_event(enum tcp_event_type type, uint32_t len, uint8_t *payload,
 
 tcp_header create_tcp_header_from_connection(tcp_connection *connection);
 
-int tcp_connect(tcp_connection *connection, endpoint src, endpoint dest,
-                int tun_fd);
+int tcp_connect(tcp_connection *connection, pthread_t *jh, endpoint src,
+                endpoint dest, int tun_fd);
 
 int tcp_write(tcp_connection *connection, uint8_t *buf, uint16_t len);
 

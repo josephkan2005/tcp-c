@@ -11,6 +11,8 @@ void print_tcp_tcb(tcp_tcb_snd *snd, tcp_tcb_rcv *rcv);
 
 void print_tq(transmission_queue *tq);
 
+void print_tq_send_times(transmission_queue *tq);
+
 void print_tcp_event_type(enum tcp_event_type type);
 
 void print_hex(uint8_t *buf, int count);

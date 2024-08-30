@@ -1,6 +1,7 @@
 #include "tcp.h"
 #include "utils.h"
 #include <arpa/inet.h>
+#include <bits/pthreadtypes.h>
 #include <fcntl.h>
 #include <linux/if_tun.h>
 #include <net/if.h>
@@ -68,7 +69,8 @@ int main(int argc, char **argv) {
     endpoint src, dest;
     src = create_endpoint("192.168.0.3", 8000);
     dest = create_endpoint("192.168.0.1", 9006);
-    int jh = tcp_connect(&connection, src, dest, tun_fd);
+    pthread_t jh;
+    tcp_connect(&connection, &jh, src, dest, tun_fd);
     char *data = "Hello";
     tcp_write(&connection, data, 6);
 
@@ -89,7 +91,6 @@ int main(int argc, char **argv) {
     }
     printf("Disconnecting\n");
     tcp_disconnect(&connection);
-    sleep(1);
     pthread_join(jh, NULL);
 
     return 0;

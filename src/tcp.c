@@ -43,8 +43,8 @@ tcp_header create_tcp_header_from_connection(tcp_connection *connection) {
     return create_tcp_header(connection->src.port, connection->dest.port);
 }
 
-int tcp_connect(tcp_connection *connection, endpoint src, endpoint dest,
-                int tun_fd) {
+int tcp_connect(tcp_connection *connection, pthread_t *jh, endpoint src,
+                endpoint dest, int tun_fd) {
     printf("Connect\n");
     tcp_create_connection(connection, tun_fd, src, dest);
     tcp_state_closed(connection);
@@ -53,6 +53,7 @@ int tcp_connect(tcp_connection *connection, endpoint src, endpoint dest,
     int ret;
 
     ret = pthread_create(&main_loop, NULL, (void *)tcp_loop, connection);
+    *jh = main_loop;
     return ret;
 }
 
@@ -221,8 +222,7 @@ int parse_event(tcp_connection *connection, tcp_event *event) {
             double rto = 1.5 * connection->srtt;
             rto = rto < 1000 ? 1000 : rto;
             rto = rto > 60000 ? 60000 : rto;
-            if (now - connection->tq.send_times[connection->tq.head_seq] >
-                rto) {
+            if (now - connection->tq.send_times[connection->tq.head] > rto) {
                 event->type = TCP_EVENT_RETRANSMISSION_TIMEOUT;
                 event->len = 0;
                 break;
@@ -281,14 +281,18 @@ int tcp_loop(tcp_connection *connection) {
         do {
             res = connection->state_func(connection, &event);
             if (connection->state == TCP_CLOSED) {
-                printf("Close & return\n");
                 break;
             }
         } while (res == 1);
         if (event.data != NULL) {
             free(event.data);
         }
+        if (connection->state == TCP_CLOSED) {
+            printf("Close & return\n");
+            break;
+        }
     }
+    sleep(1);
     tcp_destroy_connection(connection);
     return 0;
 }
@@ -369,6 +373,7 @@ int tcp_destroy_connection(tcp_connection *connection) {
 
 int tcp_transmit_dev(tcp_connection *connection, tcp_header *tcph,
                      uint8_t *payload, int payload_len) {
+    printf("Sending message\n");
     int dev_fd = connection->in_r_fds[TCP_FD_DEV].fd;
     uint8_t buf[MAX_BUF_SIZE];
 
@@ -444,6 +449,7 @@ int tcp_send_fin(tcp_connection *connection) {
     connection->snd.nxt += 1;
 
     tcp_transmit_dev(connection, &new_tcph, NULL, 0);
+    printf("Sent fin\n");
     return 0;
 }
 
@@ -686,7 +692,7 @@ int tcp_state_established(tcp_connection *connection, tcp_event *event) {
         uint32_t limit =
             connection->snd.una + connection->snd.wnd - connection->snd.nxt;
         len = len > limit ? limit : len;
-        printf("Pushing %ub to tq\n", len);
+        printf("Pushing %ub to tq, time: %ld\n", len, time(NULL));
         transmission_queue_push_back(&connection->tq, payload, len, time(NULL));
         tcp_header new_tcph = create_tcp_header_from_connection(connection);
         new_tcph.seq = connection->snd.nxt;

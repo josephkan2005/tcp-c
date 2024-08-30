@@ -55,6 +55,15 @@ void print_tq(transmission_queue *tq) {
            tq->head, tq->head_seq);
 }
 
+void print_tq_send_times(transmission_queue *tq) {
+    time_t buf[MAX_BUF_SIZE];
+    transmission_queue_times_front(tq, buf, tq->size);
+    for (int i = 0; i < tq->size; i++) {
+        printf("%ld ", buf[i]);
+    }
+    printf("\n");
+}
+
 void print_tcp_event_type(enum tcp_event_type type) {
     switch (type) {
     case TCP_EVENT_OPEN:
