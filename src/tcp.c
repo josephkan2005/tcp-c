@@ -931,6 +931,11 @@ int tcp_state_fin_wait_2(tcp_connection *connection, tcp_event *event) {
     switch (event->type) {
     case TCP_EVENT_SEGMENT_ARRIVES: {
         tcp_header *tcph = (tcp_header *)event->data;
+        int payload_len = event->len - (tcph->doff << 2);
+        int br = tcp_establish_segment_process(connection, tcph, payload_len);
+        if (br) {
+            break;
+        }
         if (tcph->flags & TCP_FLAG_FIN) {
             if (tcph->seq_ack == connection->snd.nxt) {
                 connection->rcv.nxt++;
@@ -939,6 +944,7 @@ int tcp_state_fin_wait_2(tcp_connection *connection, tcp_event *event) {
                 tcph.seq_ack = connection->rcv.nxt;
                 tcph.flags |= TCP_FLAG_ACK;
                 tcp_transmit_dev(connection, &tcph, NULL, 0);
+                connection->msl_timeout = time(NULL) + MSL;
                 connection->state = TCP_TIME_WAIT;
                 connection->state_func = tcp_state_time_wait;
                 break;
@@ -952,6 +958,7 @@ int tcp_state_fin_wait_2(tcp_connection *connection, tcp_event *event) {
         printf("Error: connnection closing\n");
         break;
     case TCP_EVENT_RECEIVE:
+        break;
     case TCP_EVENT_CLOSE:
     case TCP_EVENT_ABORT:
         connection->state = TCP_CLOSED;
