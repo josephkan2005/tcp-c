@@ -24,7 +24,7 @@ int transmission_queue_front(transmission_queue *tq, uint8_t *buf,
     if (len > tq->size) {
         len = tq->size;
     }
-    int limit = tq->head + len >= tq->cap ? tq->cap - len : len;
+    int limit = tq->head + len >= tq->cap ? tq->cap - tq->head : len;
     memcpy(buf, tq->data + tq->head, limit);
     if (limit < len) {
         memcpy(buf + limit, tq->data, len - limit);
@@ -40,7 +40,7 @@ int transmission_queue_times_front(transmission_queue *tq, time_t *buf,
     if (len > tq->size) {
         len = tq->size;
     }
-    int limit = tq->head + len >= tq->cap ? tq->cap - len : len;
+    int limit = tq->head + len >= tq->cap ? tq->cap - tq->head : len;
     memcpy(buf, tq->send_times + tq->head, limit * sizeof(time_t));
     if (limit < len) {
         memcpy(buf + limit, tq->send_times, (len - limit) * sizeof(time_t));

@@ -417,21 +417,7 @@ int tcp_create_tcb(tcp_tcb_snd *snd, tcp_tcb_rcv *rcv) {
 }
 
 int tcp_requeue_send(tcp_connection *connection) {
-    if (wrapping_lt(connection->snd.nxt, connection->tq.head_seq)) {
-        printf("Cannot requeue already acknowledged segments\n");
-        return 1;
-    }
-    uint8_t event_buf[MAX_BUF_SIZE];
-    uint32_t payload_len = wrapping_len(
-        connection->snd.nxt, connection->tq.head_seq + connection->tq.size);
-    printf("Payload len to requeue: %u\n", payload_len);
-    if (payload_len == 0) {
-        return 0;
-    }
-    uint8_t payload[MAX_BUF_SIZE];
-    transmission_queue_front(&connection->tq, payload, payload_len);
-    tcp_create_event(TCP_EVENT_SEND, payload_len, payload, event_buf);
-    write(connection->ex_w_fds[0], event_buf, payload_len + EVENT_DOFF);
+    // TODO: Use separate event queue
     return 0;
 }
 
@@ -611,9 +597,7 @@ int tcp_state_syn_sent(tcp_connection *connection, tcp_event *event) {
         connection->state = TCP_CLOSED;
         break;
     case TCP_EVENT_SEND:
-        printf("Pushing %ub to tq\n", event->len);
-        transmission_queue_push_back(&connection->tq, event->data, event->len,
-                                     time(NULL));
+        // TODO: Use separate event queue
         break;
     case TCP_EVENT_ABORT:
         connection->state = TCP_CLOSED;
@@ -636,14 +620,25 @@ int tcp_state_syn_received(tcp_connection *connection, tcp_event *event) {
         printf("Connection already exists\n");
         break;
     case TCP_EVENT_SEND:
+        // TODO: Use separate event queue
+        break;
     case TCP_EVENT_RECEIVE:
     case TCP_EVENT_CLOSE:
-        tcp_send_fin(connection);
-        connection->state = TCP_FIN_WAIT_1;
-        connection->state_func = tcp_state_fin_wait_1;
+        if (connection->snd.nxt -
+                (connection->tq.head_seq + connection->tq.size) >
+            1) {
+            // TODO: Use separate event queue
+        } else {
+            tcp_send_fin(connection);
+            connection->state = TCP_FIN_WAIT_1;
+            connection->state_func = tcp_state_fin_wait_1;
+        }
+        break;
+    case TCP_EVENT_STATUS:
         break;
     case TCP_EVENT_ABORT:
-    case TCP_EVENT_STATUS:
+        connection->state = TCP_CLOSED;
+        break;
     case TCP_EVENT_USER_TIMEOUT:
         printf("Connection aborted due to timeout\n");
         connection->state = TCP_CLOSED;
@@ -758,6 +753,7 @@ int tcp_state_established(tcp_connection *connection, tcp_event *event) {
         len = len > limit ? limit : len;
         printf("Pushing %ub to tq, time: %ld\n", len, time(NULL));
         transmission_queue_push_back(&connection->tq, payload, len, time(NULL));
+        // TODO: Use separate event queue
         tcp_header new_tcph = create_tcp_header_from_connection(connection);
         new_tcph.seq = connection->snd.nxt;
         new_tcph.seq_ack = connection->rcv.nxt;
@@ -854,6 +850,7 @@ int tcp_state_last_ack(tcp_connection *connection, tcp_event *event) {
         connection->state = TCP_CLOSED;
         break;
     case TCP_EVENT_STATUS:
+        break;
     case TCP_EVENT_USER_TIMEOUT:
         printf("Connection aborted due to timeout\n");
         connection->state = TCP_CLOSED;
@@ -911,6 +908,12 @@ int tcp_state_fin_wait_2(tcp_connection *connection, tcp_event *event) {
         tcp_header *tcph = (tcp_header *)event->data;
         if (tcph->flags & TCP_FLAG_FIN) {
             if (tcph->seq_ack == connection->snd.nxt) {
+                connection->rcv.nxt++;
+                tcp_header tcph = create_tcp_header_from_connection(connection);
+                tcph.seq = connection->snd.nxt;
+                tcph.seq_ack = connection->rcv.nxt;
+                tcph.flags |= TCP_FLAG_ACK;
+                tcp_transmit_dev(connection, &tcph, NULL, 0);
                 connection->state = TCP_TIME_WAIT;
                 connection->state_func = tcp_state_time_wait;
                 break;
@@ -958,12 +961,25 @@ int tcp_state_time_wait(tcp_connection *connection, tcp_event *event) {
         connection->state = TCP_CLOSED;
         break;
     case TCP_EVENT_STATUS:
-    case TCP_EVENT_SEGMENT_ARRIVES:
+    case TCP_EVENT_SEGMENT_ARRIVES: {
+        tcp_header *tcph = (tcp_header *)event->data;
+        if (tcph->flags & TCP_FLAG_FIN) {
+            tcp_header tcph = create_tcp_header_from_connection(connection);
+            tcph.seq = connection->snd.nxt;
+            tcph.seq_ack = connection->rcv.nxt;
+            tcph.flags |= TCP_FLAG_ACK;
+            tcp_transmit_dev(connection, &tcph, NULL, 0);
+            connection->msl_timeout = time(NULL) + MSL;
+            break;
+        }
+    } break;
     case TCP_EVENT_USER_TIMEOUT:
         printf("Connection aborted due to timeout\n");
         connection->state = TCP_CLOSED;
         break;
     case TCP_EVENT_TIME_WAIT_TIMEOUT:
+        printf("Time-wait timeout has expired\n");
+        connection->state = TCP_CLOSED;
         break;
     }
     return 0;
