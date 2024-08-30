@@ -520,6 +520,17 @@ int tcp_check_acceptability(tcp_connection *connection, tcp_header *tcph,
         }
     }
 
+    if (!acceptable) {
+        if (tcph->flags & TCP_FLAG_RST) {
+            return acceptable;
+        }
+        tcp_header new_tcph = create_tcp_header_from_connection(connection);
+        new_tcph.seq = connection->snd.nxt;
+        new_tcph.seq_ack = connection->rcv.nxt;
+        new_tcph.flags |= TCP_FLAG_ACK;
+        tcp_transmit_dev(connection, &new_tcph, NULL, 0);
+    }
+
     return acceptable;
 }
 
@@ -661,14 +672,6 @@ int tcp_state_established(tcp_connection *connection, tcp_event *event) {
         int payload_len = event->len - (tcph->doff << 2);
         int acceptable = tcp_check_acceptability(connection, tcph, payload_len);
         if (!acceptable) {
-            if (tcph->flags & TCP_FLAG_RST) {
-                break;
-            }
-            tcp_header new_tcph = create_tcp_header_from_connection(connection);
-            new_tcph.seq = connection->snd.nxt;
-            new_tcph.seq_ack = connection->rcv.nxt;
-            new_tcph.flags |= TCP_FLAG_ACK;
-            tcp_transmit_dev(connection, &new_tcph, NULL, 0);
             break;
         }
         if (tcph->flags & TCP_FLAG_RST) {
@@ -812,7 +815,18 @@ int tcp_state_close_wait(tcp_connection *connection, tcp_event *event) {
     } break;
     case TCP_EVENT_ABORT:
     case TCP_EVENT_STATUS:
-    case TCP_EVENT_SEGMENT_ARRIVES:
+    case TCP_EVENT_SEGMENT_ARRIVES: {
+        tcp_header *tcph = (tcp_header *)event->data;
+        int payload_len = event->len - (tcph->doff << 2);
+        int acceptable = tcp_check_acceptability(connection, tcph, payload_len);
+        if (!acceptable) {
+            break;
+        }
+        if (tcph->flags & TCP_FLAG_RST) {
+            connection->state = TCP_CLOSED;
+            break;
+        }
+    } break;
     case TCP_EVENT_USER_TIMEOUT:
         printf("Connection aborted due to timeout\n");
         connection->state = TCP_CLOSED;
