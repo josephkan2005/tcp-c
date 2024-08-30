@@ -534,6 +534,85 @@ int tcp_check_acceptability(tcp_connection *connection, tcp_header *tcph,
     return acceptable;
 }
 
+int tcp_establish_segment_process(tcp_connection *connection, tcp_header *tcph,
+                                  uint32_t payload_len) {
+
+    int acceptable = tcp_check_acceptability(connection, tcph, payload_len);
+    if (!acceptable) {
+        return 1;
+    }
+    if (tcph->flags & TCP_FLAG_RST) {
+        connection->state = TCP_CLOSED;
+        return 1;
+    }
+    if (tcph->flags & TCP_FLAG_SYN) {
+        tcp_send_rst(connection);
+        return 1;
+    }
+    if (tcph->flags & TCP_FLAG_ACK) {
+        if (wrapping_between(connection->snd.una, tcph->seq_ack,
+                             connection->snd.nxt + 1)) {
+            time_t now = time(NULL);
+            connection->srtt =
+                (0.9 * connection->srtt) +
+                ((1 - 0.9) *
+                 (now - connection->tq.send_times[connection->snd.una]));
+
+            connection->snd.una = tcph->seq_ack;
+
+            transmission_queue_pop_front(
+                &connection->tq,
+                wrapping_len(connection->tq.head_seq, connection->snd.una));
+
+            if (wrapping_lt(connection->snd.wl1, tcph->seq) ||
+                (connection->snd.wl1 == tcph->seq &&
+                 wrapping_lt(connection->snd.wl2, tcph->seq_ack))) {
+                connection->snd.wnd = tcph->wnd;
+                connection->snd.wl1 = tcph->seq;
+                connection->snd.wl2 = tcph->seq_ack;
+            }
+            tcp_requeue_send(connection);
+        } else if (wrapping_lt(tcph->seq_ack, connection->snd.una)) {
+            return 1;
+        } else if (wrapping_lt(connection->snd.nxt, tcph->seq_ack)) {
+            tcp_header new_tcph = create_tcp_header_from_connection(connection);
+            new_tcph.seq = connection->snd.nxt;
+            new_tcph.seq_ack = tcph->seq + 1;
+            new_tcph.flags |= TCP_FLAG_ACK;
+            tcp_transmit_dev(connection, &new_tcph, NULL, 0);
+            return 1;
+        }
+    }
+    if (tcph->flags & TCP_FLAG_URG) {
+        connection->rcv.up = connection->rcv.up > tcph->urg_ptr
+                                 ? connection->rcv.up
+                                 : tcph->urg_ptr;
+    }
+    if (payload_len > 0) {
+        tcp_header new_tcph = create_tcp_header_from_connection(connection);
+        connection->rcv.nxt = tcph->seq + payload_len;
+        write(connection->in_w_fds[TCP_FD_PIPE],
+              ((uint8_t *)tcph) + (tcph->doff << 2), payload_len);
+        new_tcph.seq = connection->snd.nxt;
+        new_tcph.seq_ack = connection->rcv.nxt;
+        new_tcph.flags |= TCP_FLAG_ACK;
+        tcp_transmit_dev(connection, &new_tcph, NULL, 0);
+    }
+    if (tcph->flags & TCP_FLAG_FIN) {
+        // signal user closing
+        connection->rcv.nxt = tcph->seq + payload_len + 1;
+        tcp_header new_tcph = create_tcp_header_from_connection(connection);
+        new_tcph.seq = connection->snd.nxt;
+        new_tcph.seq_ack = connection->rcv.nxt;
+        new_tcph.flags |= TCP_FLAG_ACK;
+        tcp_transmit_dev(connection, &new_tcph, NULL, 0);
+        connection->state = TCP_CLOSE_WAIT;
+        connection->state_func = tcp_state_close_wait;
+        printf("CHANGED CONNECTION TO CLOSING\n");
+    }
+    return 0;
+}
+
 int tcp_state_closed(tcp_connection *connection) {
     printf("Closed state\n");
     // Only support active, always send SYN
@@ -670,79 +749,9 @@ int tcp_state_established(tcp_connection *connection, tcp_event *event) {
     case TCP_EVENT_SEGMENT_ARRIVES: {
         tcp_header *tcph = (tcp_header *)event->data;
         int payload_len = event->len - (tcph->doff << 2);
-        int acceptable = tcp_check_acceptability(connection, tcph, payload_len);
-        if (!acceptable) {
+        int br = tcp_establish_segment_process(connection, tcph, payload_len);
+        if (br) {
             break;
-        }
-        if (tcph->flags & TCP_FLAG_RST) {
-            connection->state = TCP_CLOSED;
-            break;
-        }
-        if (tcph->flags & TCP_FLAG_SYN) {
-            tcp_send_rst(connection);
-            break;
-        }
-        if (tcph->flags & TCP_FLAG_ACK) {
-            if (wrapping_between(connection->snd.una, tcph->seq_ack,
-                                 connection->snd.nxt + 1)) {
-                time_t now = time(NULL);
-                connection->srtt =
-                    (0.9 * connection->srtt) +
-                    ((1 - 0.9) *
-                     (now - connection->tq.send_times[connection->snd.una]));
-
-                connection->snd.una = tcph->seq_ack;
-
-                transmission_queue_pop_front(
-                    &connection->tq,
-                    wrapping_len(connection->tq.head_seq, connection->snd.una));
-
-                if (wrapping_lt(connection->snd.wl1, tcph->seq) ||
-                    (connection->snd.wl1 == tcph->seq &&
-                     wrapping_lt(connection->snd.wl2, tcph->seq_ack))) {
-                    connection->snd.wnd = tcph->wnd;
-                    connection->snd.wl1 = tcph->seq;
-                    connection->snd.wl2 = tcph->seq_ack;
-                }
-                tcp_requeue_send(connection);
-            } else if (wrapping_lt(tcph->seq_ack, connection->snd.una)) {
-                break;
-            } else if (wrapping_lt(connection->snd.nxt, tcph->seq_ack)) {
-                tcp_header new_tcph =
-                    create_tcp_header_from_connection(connection);
-                new_tcph.seq = connection->snd.nxt;
-                new_tcph.seq_ack = tcph->seq + 1;
-                new_tcph.flags |= TCP_FLAG_ACK;
-                tcp_transmit_dev(connection, &new_tcph, NULL, 0);
-                break;
-            }
-        }
-        if (tcph->flags & TCP_FLAG_URG) {
-            connection->rcv.up = connection->rcv.up > tcph->urg_ptr
-                                     ? connection->rcv.up
-                                     : tcph->urg_ptr;
-        }
-        if (payload_len > 0) {
-            tcp_header new_tcph = create_tcp_header_from_connection(connection);
-            connection->rcv.nxt = tcph->seq + payload_len;
-            write(connection->in_w_fds[TCP_FD_PIPE],
-                  ((uint8_t *)tcph) + (tcph->doff << 2), payload_len);
-            new_tcph.seq = connection->snd.nxt;
-            new_tcph.seq_ack = connection->rcv.nxt;
-            new_tcph.flags |= TCP_FLAG_ACK;
-            tcp_transmit_dev(connection, &new_tcph, NULL, 0);
-        }
-        if (tcph->flags & TCP_FLAG_FIN) {
-            // signal user closing
-            connection->rcv.nxt = tcph->seq + payload_len + 1;
-            tcp_header new_tcph = create_tcp_header_from_connection(connection);
-            new_tcph.seq = connection->snd.nxt;
-            new_tcph.seq_ack = connection->rcv.nxt;
-            new_tcph.flags |= TCP_FLAG_ACK;
-            tcp_transmit_dev(connection, &new_tcph, NULL, 0);
-            connection->state = TCP_CLOSE_WAIT;
-            connection->state_func = tcp_state_close_wait;
-            printf("CHANGED CONNECTION TO CLOSING\n");
         }
     } break;
     case TCP_EVENT_OPEN:
@@ -814,16 +823,13 @@ int tcp_state_close_wait(tcp_connection *connection, tcp_event *event) {
         connection->state_func = tcp_state_last_ack;
     } break;
     case TCP_EVENT_ABORT:
+        break;
     case TCP_EVENT_STATUS:
     case TCP_EVENT_SEGMENT_ARRIVES: {
         tcp_header *tcph = (tcp_header *)event->data;
         int payload_len = event->len - (tcph->doff << 2);
-        int acceptable = tcp_check_acceptability(connection, tcph, payload_len);
-        if (!acceptable) {
-            break;
-        }
-        if (tcph->flags & TCP_FLAG_RST) {
-            connection->state = TCP_CLOSED;
+        int br = tcp_establish_segment_process(connection, tcph, payload_len);
+        if (br) {
             break;
         }
     } break;
@@ -883,6 +889,11 @@ int tcp_state_fin_wait_1(tcp_connection *connection, tcp_event *event) {
     switch (event->type) {
     case TCP_EVENT_SEGMENT_ARRIVES: {
         tcp_header *tcph = (tcp_header *)event->data;
+        int payload_len = event->len - (tcph->doff << 2);
+        int br = tcp_establish_segment_process(connection, tcph, payload_len);
+        if (br) {
+            break;
+        }
         if (tcph->flags & TCP_FLAG_ACK) {
             if (tcph->seq_ack == connection->snd.nxt) {
                 connection->state = TCP_FIN_WAIT_2;
@@ -943,7 +954,10 @@ int tcp_state_fin_wait_2(tcp_connection *connection, tcp_event *event) {
     case TCP_EVENT_RECEIVE:
     case TCP_EVENT_CLOSE:
     case TCP_EVENT_ABORT:
+        connection->state = TCP_CLOSED;
+        break;
     case TCP_EVENT_STATUS:
+        break;
     case TCP_EVENT_USER_TIMEOUT:
         printf("Connection aborted due to timeout\n");
         connection->state = TCP_CLOSED;
@@ -960,21 +974,6 @@ int tcp_state_fin_wait_2(tcp_connection *connection, tcp_event *event) {
 int tcp_state_time_wait(tcp_connection *connection, tcp_event *event) {
     printf("Time wait\n");
     switch (event->type) {
-    case TCP_EVENT_RETRANSMISSION_TIMEOUT: {
-
-    } break;
-    case TCP_EVENT_OPEN:
-        printf("Connection already exists\n");
-        break;
-    case TCP_EVENT_SEND:
-    case TCP_EVENT_RECEIVE:
-    case TCP_EVENT_CLOSE:
-        printf("Error: connnection closing\n");
-        break;
-    case TCP_EVENT_ABORT:
-        connection->state = TCP_CLOSED;
-        break;
-    case TCP_EVENT_STATUS:
     case TCP_EVENT_SEGMENT_ARRIVES: {
         tcp_header *tcph = (tcp_header *)event->data;
         if (tcph->flags & TCP_FLAG_FIN) {
@@ -987,6 +986,22 @@ int tcp_state_time_wait(tcp_connection *connection, tcp_event *event) {
             break;
         }
     } break;
+    case TCP_EVENT_RETRANSMISSION_TIMEOUT:
+        tcp_retransmit(connection);
+        break;
+    case TCP_EVENT_OPEN:
+        printf("Connection already exists\n");
+        break;
+    case TCP_EVENT_SEND:
+    case TCP_EVENT_RECEIVE:
+    case TCP_EVENT_CLOSE:
+        printf("Error: connnection closing\n");
+        break;
+    case TCP_EVENT_ABORT:
+        connection->state = TCP_CLOSED;
+        break;
+    case TCP_EVENT_STATUS:
+        break;
     case TCP_EVENT_USER_TIMEOUT:
         printf("Connection aborted due to timeout\n");
         connection->state = TCP_CLOSED;
@@ -1002,9 +1017,12 @@ int tcp_state_time_wait(tcp_connection *connection, tcp_event *event) {
 int tcp_state_closing(tcp_connection *connection, tcp_event *event) {
     printf("Closing\n");
     switch (event->type) {
-    case TCP_EVENT_RETRANSMISSION_TIMEOUT: {
+    case TCP_EVENT_SEGMENT_ARRIVES: {
 
     } break;
+    case TCP_EVENT_RETRANSMISSION_TIMEOUT:
+        tcp_retransmit(connection);
+        break;
     case TCP_EVENT_OPEN:
         printf("Connection already exists\n");
         break;
@@ -1012,7 +1030,6 @@ int tcp_state_closing(tcp_connection *connection, tcp_event *event) {
         connection->state = TCP_CLOSED;
         break;
     case TCP_EVENT_STATUS:
-    case TCP_EVENT_SEGMENT_ARRIVES:
         break;
     case TCP_EVENT_USER_TIMEOUT:
         printf("Connection aborted due to timeout\n");
