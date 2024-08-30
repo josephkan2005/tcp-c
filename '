@@ -53,11 +53,10 @@ int tcp_connect(tcp_connection *connection, endpoint src, endpoint dest,
     int ret;
 
     ret = pthread_create(&main_loop, NULL, (void *)tcp_loop, connection);
-    return ret;
+    return 0;
 }
 
 int tcp_write(tcp_connection *connection, uint8_t *buf, uint16_t len) {
-    connection->user_timeout = time(NULL) + USER_TIMEOUT;
     if (connection->state == TCP_CLOSED)
         return -1;
     printf("Write\n");
@@ -75,16 +74,15 @@ int tcp_write(tcp_connection *connection, uint8_t *buf, uint16_t len) {
 }
 
 int tcp_read(tcp_connection *connection, uint8_t *buf, int nbytes) {
-    connection->user_timeout = time(NULL) + USER_TIMEOUT;
     if (connection->state == TCP_CLOSED)
         return -1;
     int ready = poll(connection->ex_r_fds, 1, 1000);
     if (ready == 0) {
-        printf("Poll timed out\n");
+        printf("Poll timed out");
         return ready;
     }
     if (ready == -1) {
-        printf("Poll errored\n");
+        printf("Poll errored");
         return ready;
     }
 
@@ -318,8 +316,6 @@ int tcp_create_connection(tcp_connection *connection, int dev_fd, endpoint src,
     connection->ex_w_fds[0] = input[1];
 
     struct itimerspec utmr;
-    utmr.it_value.tv_sec = 1;
-    utmr.it_value.tv_nsec = 0;
     utmr.it_interval.tv_sec = 1;
     utmr.it_interval.tv_nsec = 0;
     timerfd_settime(connection->in_r_fds[TCP_FD_TIMER].fd, 0, &utmr, NULL);
@@ -435,7 +431,6 @@ int tcp_send_rst(tcp_connection *connection) {
 }
 
 int tcp_send_fin(tcp_connection *connection) {
-    printf("Sending fin\n");
     tcp_header new_tcph = create_tcp_header_from_connection(connection);
     new_tcph.seq = connection->snd.nxt;
     new_tcph.seq_ack = connection->rcv.nxt;
@@ -617,12 +612,6 @@ int tcp_state_established(tcp_connection *connection, tcp_event *event) {
         if (tcph->flags & TCP_FLAG_ACK) {
             if (wrapping_between(connection->snd.una, tcph->seq_ack,
                                  connection->snd.nxt + 1)) {
-                time_t now = time(NULL);
-                connection->srtt =
-                    (0.9 * connection->srtt) +
-                    ((1 - 0.9) *
-                     (now - connection->tq.send_times[connection->snd.una]));
-
                 connection->snd.una = tcph->seq_ack;
 
                 transmission_queue_pop_front(
@@ -717,13 +706,7 @@ int tcp_state_established(tcp_connection *connection, tcp_event *event) {
         time_t now = time(NULL);
         uint8_t payload[MAX_BUF_SIZE];
         transmission_queue_front(&connection->tq, payload, limit);
-        tcp_header tcph = create_tcp_header_from_connection(connection);
-        tcph.seq = connection->tq.head_seq;
-        tcph.seq_ack = connection->rcv.nxt;
-        tcph.flags |= TCP_FLAG_ACK;
-        transmission_queue_set_times(&connection->tq, limit, now);
-
-        tcp_transmit_dev(connection, &tcph, payload, limit);
+        tcp_transmit_dev(connection, tcph, payload, limit);
     } break;
     case TCP_EVENT_TIME_WAIT_TIMEOUT:
         break;
@@ -734,8 +717,8 @@ int tcp_state_established(tcp_connection *connection, tcp_event *event) {
 
 int tcp_state_close_wait(tcp_connection *connection, tcp_event *event) {
     printf("Close wait state\n");
-    print_tcp_event_type(event->type);
     switch (event->type) {
+
     case TCP_EVENT_OPEN:
         printf("Connection already exists\n");
         break;

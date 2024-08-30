@@ -5,6 +5,7 @@
 #include <linux/if_tun.h>
 #include <net/if.h>
 #include <netinet/in.h>
+#include <pthread.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -67,7 +68,7 @@ int main(int argc, char **argv) {
     endpoint src, dest;
     src = create_endpoint("192.168.0.3", 8000);
     dest = create_endpoint("192.168.0.1", 9006);
-    tcp_connect(&connection, src, dest, tun_fd);
+    int jh = tcp_connect(&connection, src, dest, tun_fd);
     char *data = "Hello";
     tcp_write(&connection, data, 6);
 
@@ -88,6 +89,8 @@ int main(int argc, char **argv) {
     }
     printf("Disconnecting\n");
     tcp_disconnect(&connection);
+    sleep(1);
+    pthread_join(jh, NULL);
 
     return 0;
 }

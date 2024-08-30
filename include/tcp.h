@@ -4,12 +4,17 @@
 #include "transmission_queue.h"
 #include <stdint.h>
 #include <sys/poll.h>
+#include <sys/timerfd.h>
 
 #define TCP_FD_DEV 0
 #define TCP_FD_TIMER 1
 #define TCP_FD_PIPE 2
+
 #define MAX_BUF_SIZE 4096
 #define EVENT_DOFF 8
+
+#define MSL 2 * 60
+#define USER_TIMEOUT 2 * 60
 
 enum tcp_state {
     TCP_LISTEN,
@@ -80,6 +85,9 @@ typedef struct tcp_connection {
     int ex_w_fds[1];
 
     transmission_queue tq;
+    double srtt;
+    time_t user_timeout;
+    time_t msl_timeout;
 
     endpoint src;
     endpoint dest;
