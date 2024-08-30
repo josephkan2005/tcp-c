@@ -11,6 +11,8 @@ int transmission_queue_create(transmission_queue *tq, uint32_t cap) {
     tq->cap = cap;
     tq->data = malloc(cap);
     tq->send_times = malloc(sizeof(time_t) * cap);
+    tq->syn = 0;
+    tq->fin = 0;
     return 0;
 }
 

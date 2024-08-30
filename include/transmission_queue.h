@@ -8,6 +8,8 @@ typedef struct transmission_queue {
     uint32_t size;
     uint8_t *data;
     time_t *send_times;
+    uint8_t syn;
+    uint8_t fin;
 
 } transmission_queue;
 

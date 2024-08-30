@@ -401,7 +401,7 @@ int tcp_transmit_dev(tcp_connection *connection, tcp_header *tcph,
 
 int tcp_create_tcb(tcp_tcb_snd *snd, tcp_tcb_rcv *rcv) {
     snd->iss = 0;
-    snd->nxt = snd->iss + 1;
+    snd->nxt = snd->iss;
     snd->una = snd->iss;
     snd->up = 0;
     snd->wl1 = 0;
@@ -451,10 +451,65 @@ int tcp_send_fin(tcp_connection *connection) {
     new_tcph.seq_ack = connection->rcv.nxt;
     new_tcph.flags |= TCP_FLAG_ACK;
     new_tcph.flags |= TCP_FLAG_FIN;
+
+    uint8_t buf[1];
+    buf[0] = 0;
+    transmission_queue_push_back(&connection->tq, buf, 1, time(NULL));
+    connection->tq.fin = 1;
+
     connection->snd.nxt += 1;
 
     tcp_transmit_dev(connection, &new_tcph, NULL, 0);
     printf("Sent fin\n");
+    return 0;
+}
+
+int tcp_send_syn(tcp_connection *connection) {
+    printf("Sending syn\n");
+    tcp_header tcph = create_tcp_header_from_connection(connection);
+    tcph.seq = connection->snd.nxt;
+    tcph.flags |= TCP_FLAG_SYN;
+
+    connection->tq.head_seq = connection->snd.nxt;
+
+    uint8_t buf[1];
+    buf[0] = 0;
+
+    transmission_queue_push_back(&connection->tq, buf, 1, time(NULL));
+    connection->tq.syn = 1;
+
+    connection->snd.nxt += 1;
+
+    tcp_transmit_dev(connection, &tcph, NULL, 0);
+
+    return 0;
+}
+
+int tcp_retransmit(tcp_connection *connection) {
+    uint32_t limit =
+        connection->snd.wnd > (connection->snd.nxt - connection->snd.una)
+            ? (connection->snd.nxt - connection->snd.una)
+            : connection->snd.wnd;
+    time_t now = time(NULL);
+    uint8_t raw_payload[MAX_BUF_SIZE];
+    uint8_t *payload = raw_payload;
+    transmission_queue_front(&connection->tq, raw_payload, limit);
+    tcp_header tcph = create_tcp_header_from_connection(connection);
+    if (connection->snd.iss == connection->tq.head_seq && connection->tq.syn) {
+        limit -= 1;
+        payload += 1;
+        tcph.flags |= TCP_FLAG_SYN;
+    }
+    if (connection->tq.size == limit && connection->tq.fin) {
+        limit -= 1;
+        tcph.flags |= TCP_FLAG_FIN;
+    }
+    tcph.seq = connection->tq.head_seq;
+    tcph.seq_ack = connection->rcv.nxt;
+    tcph.flags |= TCP_FLAG_ACK;
+    transmission_queue_set_times(&connection->tq, limit, now);
+
+    tcp_transmit_dev(connection, &tcph, payload, limit);
     return 0;
 }
 
@@ -485,12 +540,7 @@ int tcp_state_closed(tcp_connection *connection) {
     printf("Closed state\n");
     // Only support active, always send SYN
     tcp_create_tcb(&connection->snd, &connection->rcv);
-    connection->tq.head_seq = connection->snd.nxt;
-    tcp_header tcph = create_tcp_header_from_connection(connection);
-    tcph.seq = connection->snd.iss;
-    tcph.flags |= TCP_FLAG_SYN;
-
-    tcp_transmit_dev(connection, &tcph, NULL, 0);
+    tcp_send_syn(connection);
 
     connection->state = TCP_SYN_SENT;
     connection->state_func = tcp_state_syn_sent;
@@ -529,6 +579,9 @@ int tcp_state_syn_sent(tcp_connection *connection, tcp_event *event) {
             connection->rcv.irs = tcph->seq;
             connection->snd.una = tcph->seq_ack;
             // Remove appropriate retransmission segments
+            transmission_queue_pop_front(
+                &connection->tq,
+                wrapping_len(connection->tq.head_seq, connection->snd.una));
 
             if (wrapping_lt(connection->snd.iss, connection->snd.una)) {
                 connection->state = TCP_ESTABLISHED;
@@ -564,6 +617,9 @@ int tcp_state_syn_sent(tcp_connection *connection, tcp_event *event) {
     case TCP_EVENT_ABORT:
         connection->state = TCP_CLOSED;
         break;
+    case TCP_EVENT_RETRANSMISSION_TIMEOUT:
+        tcp_retransmit(connection);
+        break;
     default:
         break;
     }
@@ -592,6 +648,8 @@ int tcp_state_syn_received(tcp_connection *connection, tcp_event *event) {
         connection->state = TCP_CLOSED;
         break;
     case TCP_EVENT_RETRANSMISSION_TIMEOUT:
+        tcp_retransmit(connection);
+        break;
     case TCP_EVENT_TIME_WAIT_TIMEOUT:
         break;
     }
@@ -721,20 +779,7 @@ int tcp_state_established(tcp_connection *connection, tcp_event *event) {
         connection->state = TCP_CLOSED;
         break;
     case TCP_EVENT_RETRANSMISSION_TIMEOUT: {
-        uint32_t limit =
-            connection->snd.wnd > (connection->snd.nxt - connection->snd.una)
-                ? (connection->snd.nxt - connection->snd.una)
-                : connection->snd.wnd;
-        time_t now = time(NULL);
-        uint8_t payload[MAX_BUF_SIZE];
-        transmission_queue_front(&connection->tq, payload, limit);
-        tcp_header tcph = create_tcp_header_from_connection(connection);
-        tcph.seq = connection->tq.head_seq;
-        tcph.seq_ack = connection->rcv.nxt;
-        tcph.flags |= TCP_FLAG_ACK;
-        transmission_queue_set_times(&connection->tq, limit, now);
-
-        tcp_transmit_dev(connection, &tcph, payload, limit);
+        tcp_retransmit(connection);
     } break;
     case TCP_EVENT_TIME_WAIT_TIMEOUT:
         break;
@@ -776,6 +821,8 @@ int tcp_state_close_wait(tcp_connection *connection, tcp_event *event) {
         connection->state = TCP_CLOSED;
         break;
     case TCP_EVENT_RETRANSMISSION_TIMEOUT:
+        tcp_retransmit(connection);
+        break;
     case TCP_EVENT_TIME_WAIT_TIMEOUT:
         break;
     }
