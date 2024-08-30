@@ -218,10 +218,15 @@ int parse_event(tcp_connection *connection, tcp_event *event) {
                 break;
             }
         }
-        if (connection->snd.nxt - connection->snd.una > 1) {
-            double rto = 1.5 * connection->srtt;
-            rto = rto < 1000 ? 1000 : rto;
-            rto = rto > 60000 ? 60000 : rto;
+        double rto = 1.5 * connection->srtt;
+        rto = rto < 1 ? 1 : rto;
+        rto = rto > 60 ? 60 : rto;
+        print_tcp_tcb(&connection->snd, &connection->rcv);
+        print_tq_send_times(&connection->tq);
+        printf("now: %ld, head: %ld, rto: %f", now,
+               connection->tq.send_times[connection->tq.head], rto);
+        ;
+        if (connection->snd.nxt - connection->snd.una > 0) {
             if (now - connection->tq.send_times[connection->tq.head] > rto) {
                 event->type = TCP_EVENT_RETRANSMISSION_TIMEOUT;
                 event->len = 0;

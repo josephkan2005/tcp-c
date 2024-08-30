@@ -220,8 +220,8 @@ uint16_t tcp_checksum(tcp_ip_header *piph, tcp_header *tcph, uint8_t *payload) {
         sum += *((uint16_t *)tcph + i);
     }
 
-    tcph->check =
-        checksum((uint16_t *)payload, tcp_len - (tcph->doff << 2), sum);
+    tcph->check = checksum((uint16_t *)payload,
+                           tcp_len - (tcph->doff << 2) > 0 ? 0 : 0, sum);
 
     return tcph->check;
 }
