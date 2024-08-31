@@ -283,8 +283,12 @@ int tcp_loop(tcp_connection *connection) {
         }
 
         int res = 0;
+        enum tcp_state cur_state = connection->state;
+        enum tcp_state *p_cur_state = NULL;
         do {
-            res = connection->state_func(connection, &event);
+            res = connection->state_func(connection, &event, p_cur_state);
+            p_cur_state = &connection->state;
+            cur_state = connection->state;
             if (connection->state == TCP_CLOSED) {
                 break;
             }
@@ -625,7 +629,8 @@ int tcp_state_closed(tcp_connection *connection) {
     return 0;
 }
 
-int tcp_state_syn_sent(tcp_connection *connection, tcp_event *event) {
+int tcp_state_syn_sent(tcp_connection *connection, tcp_event *event,
+                       enum tcp_state *prev_state) {
     printf("Syn sent state\n");
     switch (event->type) {
     case TCP_EVENT_SEGMENT_ARRIVES: {
@@ -701,7 +706,8 @@ int tcp_state_syn_sent(tcp_connection *connection, tcp_event *event) {
     return 0;
 }
 
-int tcp_state_syn_received(tcp_connection *connection, tcp_event *event) {
+int tcp_state_syn_received(tcp_connection *connection, tcp_event *event,
+                           enum tcp_state *prev_state) {
     printf("Syn received state\n");
     switch (event->type) {
     case TCP_EVENT_SEGMENT_ARRIVES:
@@ -742,7 +748,8 @@ int tcp_state_syn_received(tcp_connection *connection, tcp_event *event) {
     return 0;
 }
 
-int tcp_state_established(tcp_connection *connection, tcp_event *event) {
+int tcp_state_established(tcp_connection *connection, tcp_event *event,
+                          enum tcp_state *prev_state) {
     printf("Established state\n");
     print_tcp_event_type(event->type);
     switch (event->type) {
@@ -797,7 +804,8 @@ int tcp_state_established(tcp_connection *connection, tcp_event *event) {
     return 0;
 }
 
-int tcp_state_close_wait(tcp_connection *connection, tcp_event *event) {
+int tcp_state_close_wait(tcp_connection *connection, tcp_event *event,
+                         enum tcp_state *prev_state) {
     printf("Close wait state\n");
     print_tcp_event_type(event->type);
     switch (event->type) {
@@ -846,7 +854,8 @@ int tcp_state_close_wait(tcp_connection *connection, tcp_event *event) {
     return 0;
 }
 
-int tcp_state_last_ack(tcp_connection *connection, tcp_event *event) {
+int tcp_state_last_ack(tcp_connection *connection, tcp_event *event,
+                       enum tcp_state *prev_state) {
     printf("Last ack state\n");
     switch (event->type) {
     case TCP_EVENT_SEGMENT_ARRIVES: {
@@ -884,7 +893,8 @@ int tcp_state_last_ack(tcp_connection *connection, tcp_event *event) {
     return 0;
 }
 
-int tcp_state_fin_wait_1(tcp_connection *connection, tcp_event *event) {
+int tcp_state_fin_wait_1(tcp_connection *connection, tcp_event *event,
+                         enum tcp_state *prev_state) {
     printf("Fin wait 1 state\n");
     switch (event->type) {
     case TCP_EVENT_SEGMENT_ARRIVES: {
@@ -898,7 +908,13 @@ int tcp_state_fin_wait_1(tcp_connection *connection, tcp_event *event) {
             if (tcph->seq_ack == connection->snd.nxt) {
                 connection->state = TCP_FIN_WAIT_2;
                 connection->state_func = tcp_state_fin_wait_2;
-                break;
+                return 1;
+            }
+        }
+        if (tcph->flags & TCP_FLAG_FIN) {
+            if (tcph->seq_ack == connection->snd.nxt) {
+                connection->state = TCP_TIME_WAIT;
+                connection->state_func = tcp_state_time_wait;
             }
         }
     } break;
@@ -926,15 +942,19 @@ int tcp_state_fin_wait_1(tcp_connection *connection, tcp_event *event) {
     return 0;
 }
 
-int tcp_state_fin_wait_2(tcp_connection *connection, tcp_event *event) {
+int tcp_state_fin_wait_2(tcp_connection *connection, tcp_event *event,
+                         enum tcp_state *prev_state) {
     printf("Fin wait 2 state\n");
     switch (event->type) {
     case TCP_EVENT_SEGMENT_ARRIVES: {
         tcp_header *tcph = (tcp_header *)event->data;
         int payload_len = event->len - (tcph->doff << 2);
-        int br = tcp_establish_segment_process(connection, tcph, payload_len);
-        if (br) {
-            break;
+        if (event == NULL) {
+            int br =
+                tcp_establish_segment_process(connection, tcph, payload_len);
+            if (br) {
+                break;
+            }
         }
         if (tcph->flags & TCP_FLAG_FIN) {
             if (tcph->seq_ack == connection->snd.nxt) {
@@ -944,7 +964,7 @@ int tcp_state_fin_wait_2(tcp_connection *connection, tcp_event *event) {
                 tcph.seq_ack = connection->rcv.nxt;
                 tcph.flags |= TCP_FLAG_ACK;
                 tcp_transmit_dev(connection, &tcph, NULL, 0);
-                connection->msl_timeout = time(NULL) + MSL;
+                connection->msl_timeout = time(NULL) + 2 * MSL;
                 connection->state = TCP_TIME_WAIT;
                 connection->state_func = tcp_state_time_wait;
                 break;
@@ -978,18 +998,14 @@ int tcp_state_fin_wait_2(tcp_connection *connection, tcp_event *event) {
     return 0;
 }
 
-int tcp_state_time_wait(tcp_connection *connection, tcp_event *event) {
+int tcp_state_time_wait(tcp_connection *connection, tcp_event *event,
+                        enum tcp_state *prev_state) {
     printf("Time wait\n");
     switch (event->type) {
     case TCP_EVENT_SEGMENT_ARRIVES: {
         tcp_header *tcph = (tcp_header *)event->data;
         if (tcph->flags & TCP_FLAG_FIN) {
-            tcp_header tcph = create_tcp_header_from_connection(connection);
-            tcph.seq = connection->snd.nxt;
-            tcph.seq_ack = connection->rcv.nxt;
-            tcph.flags |= TCP_FLAG_ACK;
-            tcp_transmit_dev(connection, &tcph, NULL, 0);
-            connection->msl_timeout = time(NULL) + MSL;
+            connection->msl_timeout = time(NULL) + 2 * MSL;
             break;
         }
     } break;
@@ -1021,7 +1037,8 @@ int tcp_state_time_wait(tcp_connection *connection, tcp_event *event) {
     return 0;
 }
 
-int tcp_state_closing(tcp_connection *connection, tcp_event *event) {
+int tcp_state_closing(tcp_connection *connection, tcp_event *event,
+                      enum tcp_state *prev_state) {
     printf("Closing\n");
     switch (event->type) {
     case TCP_EVENT_SEGMENT_ARRIVES: {

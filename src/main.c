@@ -78,7 +78,13 @@ int main(int argc, char **argv) {
     tcp_write(&connection, (uint8_t *)&buf, 4); */
 
     uint8_t buf[MAX_BUF_SIZE];
+    int count = 0;
     while (1) {
+        if (count == 3) {
+            tcp_disconnect(&connection);
+            pthread_join(jh, NULL);
+            return 0;
+        }
         if (connection.state == TCP_CLOSE_WAIT) {
             break;
         }
@@ -88,6 +94,7 @@ int main(int argc, char **argv) {
             continue;
         }
         printf("Reading: %s\n", buf);
+        count++;
     }
     printf("Disconnecting\n");
     tcp_disconnect(&connection);

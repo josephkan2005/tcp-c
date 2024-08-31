@@ -14,7 +14,7 @@
 #define MAX_BUF_SIZE 4096
 #define EVENT_DOFF 8
 
-#define MSL 2 * 60
+#define MSL 2
 #define USER_TIMEOUT 2 * 60
 
 enum tcp_state {
@@ -78,7 +78,8 @@ typedef struct tcp_connection {
     enum tcp_state state;
     tcp_tcb_snd snd;
     tcp_tcb_rcv rcv;
-    int (*state_func)(struct tcp_connection *, tcp_event *);
+    int (*state_func)(struct tcp_connection *, tcp_event *,
+                      enum tcp_state *prev_state);
 
     struct pollfd in_r_fds[3];
     int in_w_fds[3];
@@ -135,12 +136,21 @@ int tcp_check_acceptability(tcp_connection *connection, tcp_header *tcph,
                             uint16_t payload_len);
 
 int tcp_state_closed(tcp_connection *connection);
-int tcp_state_syn_received(tcp_connection *connection, tcp_event *event);
-int tcp_state_syn_sent(tcp_connection *connection, tcp_event *event);
-int tcp_state_established(tcp_connection *connection, tcp_event *event);
-int tcp_state_close_wait(tcp_connection *connection, tcp_event *event);
-int tcp_state_last_ack(tcp_connection *connection, tcp_event *event);
-int tcp_state_fin_wait_1(tcp_connection *connection, tcp_event *event);
-int tcp_state_fin_wait_2(tcp_connection *connection, tcp_event *event);
-int tcp_state_time_wait(tcp_connection *connection, tcp_event *event);
-int tcp_state_closing(tcp_connection *connection, tcp_event *event);
+int tcp_state_syn_received(tcp_connection *connection, tcp_event *event,
+                           enum tcp_state *prev_state);
+int tcp_state_syn_sent(tcp_connection *connection, tcp_event *event,
+                       enum tcp_state *prev_state);
+int tcp_state_established(tcp_connection *connection, tcp_event *event,
+                          enum tcp_state *prev_state);
+int tcp_state_close_wait(tcp_connection *connection, tcp_event *event,
+                         enum tcp_state *prev_state);
+int tcp_state_last_ack(tcp_connection *connection, tcp_event *event,
+                       enum tcp_state *prev_state);
+int tcp_state_fin_wait_1(tcp_connection *connection, tcp_event *event,
+                         enum tcp_state *prev_state);
+int tcp_state_fin_wait_2(tcp_connection *connection, tcp_event *event,
+                         enum tcp_state *prev_state);
+int tcp_state_time_wait(tcp_connection *connection, tcp_event *event,
+                        enum tcp_state *prev_state);
+int tcp_state_closing(tcp_connection *connection, tcp_event *event,
+                      enum tcp_state *prev_state);
