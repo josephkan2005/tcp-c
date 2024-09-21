@@ -111,7 +111,8 @@ int tcp_read(tcp_connection *connection, uint8_t *buf, int len);
 
 int tcp_disconnect(tcp_connection *connection);
 
-int tcp_open(uint16_t port, uint32_t addr, uint8_t active);
+int tcp_open(tcp_connection *connection, endpoint src, endpoint dest,
+             uint8_t active, pthread_t *jh, int tun_fd);
 
 int tcp_send();
 
@@ -135,7 +136,11 @@ int tcp_loop(tcp_connection *connection);
 int tcp_check_acceptability(tcp_connection *connection, tcp_header *tcph,
                             uint16_t payload_len);
 
+int tcp_send_syn(tcp_connection *connection);
+
 int tcp_state_closed(tcp_connection *connection);
+int tcp_state_listen(tcp_connection *connection, tcp_event *event,
+                     enum tcp_state *prev_state);
 int tcp_state_syn_received(tcp_connection *connection, tcp_event *event,
                            enum tcp_state *prev_state);
 int tcp_state_syn_sent(tcp_connection *connection, tcp_event *event,

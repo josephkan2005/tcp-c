@@ -2,6 +2,7 @@
 #include "header.h"
 #include "utils.h"
 #include <arpa/inet.h>
+#include <bits/pthreadtypes.h>
 #include <fcntl.h>
 #include <linux/if_tun.h>
 #include <net/if.h>
@@ -46,15 +47,13 @@ tcp_header create_tcp_header_from_connection(tcp_connection *connection) {
 int tcp_connect(tcp_connection *connection, pthread_t *jh, endpoint src,
                 endpoint dest, int tun_fd) {
     printf("Connect\n");
-    tcp_create_connection(connection, tun_fd, src, dest);
-    tcp_state_closed(connection);
+    return tcp_open(connection, src, dest, 1, jh, tun_fd);
+}
 
-    pthread_t main_loop;
-    int ret;
-
-    ret = pthread_create(&main_loop, NULL, (void *)tcp_loop, connection);
-    *jh = main_loop;
-    return ret;
+int tcp_listen(tcp_connection *connection, pthread_t *jh, endpoint src,
+               int tun_fd) {
+    printf("Listen\n");
+    return tcp_open(connection, src, src, 1, jh, tun_fd);
 }
 
 int tcp_write(tcp_connection *connection, uint8_t *buf, uint16_t len) {
@@ -102,11 +101,27 @@ int tcp_disconnect(tcp_connection *connection) {
     return 0;
 }
 
-int tcp_open(uint16_t port, uint32_t addr, uint8_t active) {
-    if (!active) {
-        return -1;
+int tcp_open(tcp_connection *connection, endpoint src, endpoint dest,
+             uint8_t active, pthread_t *jh, int tun_fd) {
+    tcp_create_connection(connection, tun_fd, src, dest);
+    tcp_create_tcb(&connection->snd, &connection->rcv);
+
+    if (active) {
+        tcp_send_syn(connection);
+
+        connection->state = TCP_SYN_SENT;
+        connection->state_func = tcp_state_syn_sent;
+    } else {
+        connection->state = TCP_LISTEN;
+        connection->state_func = tcp_state_listen;
     }
-    return 0;
+
+    pthread_t main_loop;
+    int ret;
+
+    ret = pthread_create(&main_loop, NULL, (void *)tcp_loop, connection);
+    *jh = main_loop;
+    return ret;
 }
 
 int tcp_send() {
@@ -383,6 +398,7 @@ int tcp_destroy_connection(tcp_connection *connection) {
 int tcp_transmit_dev(tcp_connection *connection, tcp_header *tcph,
                      uint8_t *payload, int payload_len) {
     printf("Sending message\n");
+    print_tcp_tcb(&connection->snd, &connection->rcv);
     int dev_fd = connection->in_r_fds[TCP_FD_DEV].fd;
     uint8_t buf[MAX_BUF_SIZE];
 
@@ -476,6 +492,8 @@ int tcp_send_syn(tcp_connection *connection) {
 }
 
 int tcp_retransmit(tcp_connection *connection) {
+    printf("Retransmitting\n");
+    print_tcp_tcb(&connection->snd, &connection->rcv);
     uint32_t limit =
         connection->snd.wnd > (connection->snd.nxt - connection->snd.una)
             ? (connection->snd.nxt - connection->snd.una)
@@ -602,18 +620,6 @@ int tcp_establish_segment_process(tcp_connection *connection, tcp_header *tcph,
         new_tcph.flags |= TCP_FLAG_ACK;
         tcp_transmit_dev(connection, &new_tcph, NULL, 0);
     }
-    if (tcph->flags & TCP_FLAG_FIN) {
-        // signal user closing
-        connection->rcv.nxt = tcph->seq + payload_len + 1;
-        tcp_header new_tcph = create_tcp_header_from_connection(connection);
-        new_tcph.seq = connection->snd.nxt;
-        new_tcph.seq_ack = connection->rcv.nxt;
-        new_tcph.flags |= TCP_FLAG_ACK;
-        tcp_transmit_dev(connection, &new_tcph, NULL, 0);
-        connection->state = TCP_CLOSE_WAIT;
-        connection->state_func = tcp_state_close_wait;
-        printf("CHANGED CONNECTION TO CLOSING\n");
-    }
     return 0;
 }
 
@@ -626,6 +632,25 @@ int tcp_state_closed(tcp_connection *connection) {
     connection->state = TCP_SYN_SENT;
     connection->state_func = tcp_state_syn_sent;
 
+    return 0;
+}
+
+int tcp_state_listen(tcp_connection *connection, tcp_event *event,
+                     enum tcp_state *prev_state) {
+    printf("Listen state\n");
+    switch (event->type) {
+    case TCP_EVENT_OPEN:
+    case TCP_EVENT_SEND:
+    case TCP_EVENT_RECEIVE:
+    case TCP_EVENT_CLOSE:
+    case TCP_EVENT_ABORT:
+    case TCP_EVENT_STATUS:
+    case TCP_EVENT_SEGMENT_ARRIVES:
+    case TCP_EVENT_USER_TIMEOUT:
+    case TCP_EVENT_RETRANSMISSION_TIMEOUT:
+    case TCP_EVENT_TIME_WAIT_TIMEOUT:
+        break;
+    }
     return 0;
 }
 
@@ -759,6 +784,18 @@ int tcp_state_established(tcp_connection *connection, tcp_event *event,
         int br = tcp_establish_segment_process(connection, tcph, payload_len);
         if (br) {
             break;
+        }
+        if (tcph->flags & TCP_FLAG_FIN) {
+            // signal user closing
+            connection->rcv.nxt = tcph->seq + payload_len + 1;
+            tcp_header new_tcph = create_tcp_header_from_connection(connection);
+            new_tcph.seq = connection->snd.nxt;
+            new_tcph.seq_ack = connection->rcv.nxt;
+            new_tcph.flags |= TCP_FLAG_ACK;
+            tcp_transmit_dev(connection, &new_tcph, NULL, 0);
+            connection->state = TCP_CLOSE_WAIT;
+            connection->state_func = tcp_state_close_wait;
+            printf("CHANGED CONNECTION TO CLOSING\n");
         }
     } break;
     case TCP_EVENT_OPEN:
@@ -949,7 +986,7 @@ int tcp_state_fin_wait_2(tcp_connection *connection, tcp_event *event,
     case TCP_EVENT_SEGMENT_ARRIVES: {
         tcp_header *tcph = (tcp_header *)event->data;
         int payload_len = event->len - (tcph->doff << 2);
-        if (event == NULL) {
+        if (*prev_state != TCP_FIN_WAIT_1) {
             int br =
                 tcp_establish_segment_process(connection, tcph, payload_len);
             if (br) {
