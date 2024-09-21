@@ -93,6 +93,7 @@ typedef struct tcp_connection {
 
     endpoint src;
     endpoint dest;
+    int active;
 } tcp_connection;
 
 endpoint create_endpoint(char *addr, uint16_t port);
@@ -104,6 +105,9 @@ tcp_header create_tcp_header_from_connection(tcp_connection *connection);
 
 int tcp_connect(tcp_connection *connection, pthread_t *jh, endpoint src,
                 endpoint dest, int tun_fd);
+
+int tcp_listen(tcp_connection *connection, pthread_t *jh, endpoint src,
+               int tun_fd);
 
 int tcp_write(tcp_connection *connection, uint8_t *buf, uint16_t len);
 

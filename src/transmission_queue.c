@@ -125,6 +125,15 @@ int transmission_queue_realloc(transmission_queue *tq) {
     return 0;
 }
 
+int transmission_queue_clear(transmission_queue *tq) {
+    tq->size = 0;
+    tq->head = 0;
+    tq->head_seq = 0;
+    tq->syn = 0;
+    tq->fin = 0;
+    return 0;
+}
+
 int transmission_queue_destroy(transmission_queue *tq) {
     tq->size = 0;
     if (tq->data != NULL) {

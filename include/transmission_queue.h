@@ -31,4 +31,6 @@ int transmission_queue_set_times(transmission_queue *tq, uint32_t len,
 
 int transmission_queue_realloc(transmission_queue *tq);
 
+int transmission_queue_clear(transmission_queue *tq);
+
 int transmission_queue_destroy(transmission_queue *tq);

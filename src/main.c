@@ -70,12 +70,10 @@ int main(int argc, char **argv) {
     src = create_endpoint("192.168.0.3", 8000);
     dest = create_endpoint("192.168.0.1", 9006);
     pthread_t jh;
-    tcp_connect(&connection, &jh, src, dest, tun_fd);
-    char *data = "Hello";
-    tcp_write(&connection, data, 6);
-
-    /* uint32_t buf = 0x00110011;
-    tcp_write(&connection, (uint8_t *)&buf, 4); */
+    tcp_listen(&connection, &jh, src, tun_fd);
+    // tcp_connect(&connection, &jh, src, dest, tun_fd);
+    // char *data = "Hello";
+    // tcp_write(&connection, data, 6);
 
     uint8_t buf[MAX_BUF_SIZE];
     int count = 0;

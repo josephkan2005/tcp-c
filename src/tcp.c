@@ -53,7 +53,7 @@ int tcp_connect(tcp_connection *connection, pthread_t *jh, endpoint src,
 int tcp_listen(tcp_connection *connection, pthread_t *jh, endpoint src,
                int tun_fd) {
     printf("Listen\n");
-    return tcp_open(connection, src, src, 1, jh, tun_fd);
+    return tcp_open(connection, src, src, 0, jh, tun_fd);
 }
 
 int tcp_write(tcp_connection *connection, uint8_t *buf, uint16_t len) {
@@ -111,9 +111,11 @@ int tcp_open(tcp_connection *connection, endpoint src, endpoint dest,
 
         connection->state = TCP_SYN_SENT;
         connection->state_func = tcp_state_syn_sent;
+        connection->active = 1;
     } else {
         connection->state = TCP_LISTEN;
         connection->state_func = tcp_state_listen;
+        connection->active = 0;
     }
 
     pthread_t main_loop;
@@ -179,8 +181,9 @@ int parse_event(tcp_connection *connection, tcp_event *event) {
             (iph.ihl << 2) != IP_HEADER_SIZE) {
             return -1;
         }
-        if (iph.src_addr != connection->dest.addr ||
-            iph.dest_addr != connection->src.addr) {
+        if (connection->state != TCP_LISTEN &&
+            (iph.src_addr != connection->dest.addr ||
+             iph.dest_addr != connection->src.addr)) {
 
             printf("Addr mismatch: %d %d %d %d\n", iph.src_addr, iph.dest_addr,
                    connection->src.addr, connection->dest.addr);
@@ -191,20 +194,26 @@ int parse_event(tcp_connection *connection, tcp_event *event) {
         tcp_header tcph;
         to_tcp_header(&tcph, buf + (iph.ihl << 2));
 
-        if (tcph.src_port != connection->dest.port ||
-            tcph.dest_port != connection->src.port) {
+        if (connection->state != TCP_LISTEN &&
+            (tcph.src_port != connection->dest.port ||
+             tcph.dest_port != connection->src.port)) {
 
             printf("Ports mismatch: %d %d %d %d\n", tcph.src_port,
                    tcph.dest_port, connection->src.port, connection->dest.port);
 
             return -1;
         }
-        event->len = iph.len - (iph.ihl << 2);
+        event->len = iph.len;
         event->data = malloc(event->len);
-        memcpy(event->data, &tcph, tcph.doff << 2);
-        memcpy(event->data + (tcph.doff << 2),
+        memcpy(event->data, &iph, iph.ihl << 2);
+        memcpy(event->data + (iph.ihl << 2), &tcph, tcph.doff << 2);
+        memcpy(event->data + (iph.ihl << 2) + (tcph.doff << 2),
                buf + (iph.ihl << 2) + (tcph.doff << 2),
-               event->len - (tcph.doff << 2));
+               event->len - ((iph.ihl << 2) + (tcph.doff << 2)));
+        print_ip_header(&iph);
+        print_ip_header((ip_header *)event->data);
+        print_tcp_header(&tcph);
+        print_tcp_header((tcp_header *)(event->data + (iph.ihl << 2)));
         break;
     case TCP_FD_PIPE:
         printf("TCP_FD_PIPE\n");
@@ -639,15 +648,75 @@ int tcp_state_listen(tcp_connection *connection, tcp_event *event,
                      enum tcp_state *prev_state) {
     printf("Listen state\n");
     switch (event->type) {
+    case TCP_EVENT_SEGMENT_ARRIVES: {
+        ip_header *iph = (ip_header *)event->data;
+        tcp_header *tcph = (tcp_header *)(event->data + (iph->ihl << 2));
+        if (tcph->flags & TCP_FLAG_RST) {
+            break;
+        }
+        if (tcph->flags & TCP_FLAG_ACK) {
+            // TODO: Send rst
+            break;
+        }
+        if (tcph->flags & TCP_FLAG_SYN) {
+            endpoint dest;
+            dest.addr = iph->src_addr;
+            dest.port = tcph->src_port;
+            connection->dest = dest;
+
+            connection->rcv.nxt = tcph->seq + 1;
+            connection->rcv.irs = tcph->seq;
+
+            tcp_header new_tcph = create_tcp_header_from_connection(connection);
+            new_tcph.flags |= TCP_FLAG_SYN;
+            new_tcph.flags |= TCP_FLAG_ACK;
+            new_tcph.seq = connection->snd.iss;
+            new_tcph.seq_ack = connection->rcv.nxt;
+            tcp_transmit_dev(connection, &new_tcph, NULL, 0);
+
+            connection->tq.head_seq = connection->snd.nxt;
+
+            uint8_t buf[1];
+            buf[0] = 0;
+
+            transmission_queue_push_back(&connection->tq, buf, 1, time(NULL));
+            connection->tq.syn = 1;
+            connection->snd.nxt = connection->snd.iss + 1;
+            connection->snd.una = connection->snd.iss;
+
+            connection->state = TCP_SYN_RECEIVED;
+            connection->state_func = tcp_state_syn_received;
+        }
+
+    } break;
     case TCP_EVENT_OPEN:
+        break;
     case TCP_EVENT_SEND:
+        if (connection->src.addr == connection->dest.addr &&
+            connection->src.port == connection->dest.port) {
+            printf("Foreign socket not specified\n");
+            break;
+        }
+        tcp_send_syn(connection);
+        connection->state = TCP_SYN_SENT;
+        connection->state_func = tcp_state_syn_sent;
+        break;
     case TCP_EVENT_RECEIVE:
+        break;
     case TCP_EVENT_CLOSE:
+        connection->state = TCP_CLOSED;
+        break;
     case TCP_EVENT_ABORT:
+        connection->state = TCP_CLOSED;
+        break;
     case TCP_EVENT_STATUS:
-    case TCP_EVENT_SEGMENT_ARRIVES:
+        break;
     case TCP_EVENT_USER_TIMEOUT:
+        printf("Connection aborted due to timeout\n");
+        connection->state = TCP_CLOSED;
+        break;
     case TCP_EVENT_RETRANSMISSION_TIMEOUT:
+        break;
     case TCP_EVENT_TIME_WAIT_TIMEOUT:
         break;
     }
@@ -659,7 +728,8 @@ int tcp_state_syn_sent(tcp_connection *connection, tcp_event *event,
     printf("Syn sent state\n");
     switch (event->type) {
     case TCP_EVENT_SEGMENT_ARRIVES: {
-        tcp_header *tcph = (tcp_header *)event->data;
+        ip_header *iph = (ip_header *)event->data;
+        tcp_header *tcph = (tcp_header *)(event->data + (iph->ihl << 2));
         if (tcph->flags & TCP_FLAG_ACK) {
             if (wrapping_lt(tcph->seq_ack, connection->snd.iss - 1) ||
                 wrapping_lt(connection->snd.nxt, tcph->seq_ack)) {
@@ -725,6 +795,10 @@ int tcp_state_syn_sent(tcp_connection *connection, tcp_event *event,
     case TCP_EVENT_RETRANSMISSION_TIMEOUT:
         tcp_retransmit(connection);
         break;
+    case TCP_EVENT_USER_TIMEOUT:
+        printf("Connection aborted due to timeout\n");
+        connection->state = TCP_CLOSED;
+        break;
     default:
         break;
     }
@@ -735,8 +809,57 @@ int tcp_state_syn_received(tcp_connection *connection, tcp_event *event,
                            enum tcp_state *prev_state) {
     printf("Syn received state\n");
     switch (event->type) {
-    case TCP_EVENT_SEGMENT_ARRIVES:
-        break;
+    case TCP_EVENT_SEGMENT_ARRIVES: {
+        ip_header *iph = (ip_header *)event->data;
+        tcp_header *tcph = (tcp_header *)(event->data + (iph->ihl << 2));
+        int payload_len = event->len - ((iph->ihl << 2) + (tcph->doff << 2));
+        int acceptable = tcp_check_acceptability(connection, tcph, payload_len);
+        if (!acceptable) {
+            return 0;
+        }
+        if (tcph->flags & TCP_FLAG_RST) {
+            transmission_queue_clear(&connection->tq);
+            if (connection->active) {
+                printf("Connection refused\n");
+                connection->state = TCP_CLOSED;
+            } else {
+                printf("Returning to listen\n");
+                connection->state = TCP_LISTEN;
+            }
+            break;
+        }
+        if (tcph->flags & TCP_FLAG_SYN) {
+            tcp_send_rst(connection);
+            connection->state = TCP_CLOSED;
+            break;
+        }
+        if (tcph->flags & TCP_FLAG_ACK) {
+            if (wrapping_between(connection->snd.una - 1, tcph->seq_ack,
+                                 connection->snd.nxt + 1)) {
+                connection->state = TCP_ESTABLISHED;
+                connection->state_func = tcp_state_established;
+                return 1;
+            } else {
+                tcp_header new_tcph =
+                    create_tcp_header_from_connection(connection);
+                new_tcph.seq = tcph->seq_ack;
+                new_tcph.flags |= TCP_FLAG_RST;
+                tcp_transmit_dev(connection, &new_tcph, NULL, 0);
+            }
+        }
+        if (tcph->flags & TCP_FLAG_FIN) {
+            // signal user closing
+            connection->rcv.nxt = tcph->seq + payload_len + 1;
+            tcp_header new_tcph = create_tcp_header_from_connection(connection);
+            new_tcph.seq = connection->snd.nxt;
+            new_tcph.seq_ack = connection->rcv.nxt;
+            new_tcph.flags |= TCP_FLAG_ACK;
+            tcp_transmit_dev(connection, &new_tcph, NULL, 0);
+            connection->state = TCP_CLOSE_WAIT;
+            connection->state_func = tcp_state_close_wait;
+            printf("CHANGED CONNECTION TO CLOSING\n");
+        }
+    } break;
     case TCP_EVENT_OPEN:
         printf("Connection already exists\n");
         break;
@@ -779,8 +902,9 @@ int tcp_state_established(tcp_connection *connection, tcp_event *event,
     print_tcp_event_type(event->type);
     switch (event->type) {
     case TCP_EVENT_SEGMENT_ARRIVES: {
-        tcp_header *tcph = (tcp_header *)event->data;
-        int payload_len = event->len - (tcph->doff << 2);
+        ip_header *iph = (ip_header *)event->data;
+        tcp_header *tcph = (tcp_header *)(event->data + (iph->ihl << 2));
+        int payload_len = event->len - ((iph->ihl << 2) + (tcph->doff << 2));
         int br = tcp_establish_segment_process(connection, tcph, payload_len);
         if (br) {
             break;
@@ -871,8 +995,9 @@ int tcp_state_close_wait(tcp_connection *connection, tcp_event *event,
         break;
     case TCP_EVENT_STATUS:
     case TCP_EVENT_SEGMENT_ARRIVES: {
-        tcp_header *tcph = (tcp_header *)event->data;
-        int payload_len = event->len - (tcph->doff << 2);
+        ip_header *iph = (ip_header *)event->data;
+        tcp_header *tcph = (tcp_header *)(event->data + (iph->ihl << 2));
+        int payload_len = event->len - ((iph->ihl << 2) + (tcph->doff << 2));
         int br = tcp_establish_segment_process(connection, tcph, payload_len);
         if (br) {
             break;
@@ -896,7 +1021,8 @@ int tcp_state_last_ack(tcp_connection *connection, tcp_event *event,
     printf("Last ack state\n");
     switch (event->type) {
     case TCP_EVENT_SEGMENT_ARRIVES: {
-        tcp_header *tcph = (tcp_header *)event->data;
+        ip_header *iph = (ip_header *)event->data;
+        tcp_header *tcph = (tcp_header *)(event->data + (iph->ihl << 2));
         if (tcph->flags & TCP_FLAG_ACK) {
             if (tcph->seq_ack == connection->snd.nxt) {
                 connection->state = TCP_CLOSED;
@@ -935,8 +1061,9 @@ int tcp_state_fin_wait_1(tcp_connection *connection, tcp_event *event,
     printf("Fin wait 1 state\n");
     switch (event->type) {
     case TCP_EVENT_SEGMENT_ARRIVES: {
-        tcp_header *tcph = (tcp_header *)event->data;
-        int payload_len = event->len - (tcph->doff << 2);
+        ip_header *iph = (ip_header *)event->data;
+        tcp_header *tcph = (tcp_header *)(event->data + (iph->ihl << 2));
+        int payload_len = event->len - ((iph->ihl << 2) + (tcph->doff << 2));
         int br = tcp_establish_segment_process(connection, tcph, payload_len);
         if (br) {
             break;
@@ -984,9 +1111,10 @@ int tcp_state_fin_wait_2(tcp_connection *connection, tcp_event *event,
     printf("Fin wait 2 state\n");
     switch (event->type) {
     case TCP_EVENT_SEGMENT_ARRIVES: {
-        tcp_header *tcph = (tcp_header *)event->data;
-        int payload_len = event->len - (tcph->doff << 2);
-        if (*prev_state != TCP_FIN_WAIT_1) {
+        ip_header *iph = (ip_header *)event->data;
+        tcp_header *tcph = (tcp_header *)(event->data + (iph->ihl << 2));
+        int payload_len = event->len - ((iph->ihl << 2) + (tcph->doff << 2));
+        if (prev_state != NULL && *prev_state != TCP_FIN_WAIT_1) {
             int br =
                 tcp_establish_segment_process(connection, tcph, payload_len);
             if (br) {
@@ -1040,7 +1168,8 @@ int tcp_state_time_wait(tcp_connection *connection, tcp_event *event,
     printf("Time wait\n");
     switch (event->type) {
     case TCP_EVENT_SEGMENT_ARRIVES: {
-        tcp_header *tcph = (tcp_header *)event->data;
+        ip_header *iph = (ip_header *)event->data;
+        tcp_header *tcph = (tcp_header *)(event->data + (iph->ihl << 2));
         if (tcph->flags & TCP_FLAG_FIN) {
             connection->msl_timeout = time(NULL) + 2 * MSL;
             break;
